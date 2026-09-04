@@ -1,4 +1,4 @@
-name: Persist verified local Whisper sidecar through VPS SSH
+name: Preflight full Voice API cutover
 
 on:
   push:
@@ -10,30 +10,58 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: voice-local-whisper-production
-  cancel-in-progress: false
-
 jobs:
-  restore:
+  preflight:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
-      - name: Start and verify persistent local Whisper sidecar
+      - name: Inspect API edge, PM2 and production data without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 10m
-          script_stop: true
+          command_timeout: 5m
+          script_stop: false
           script: |
-            set -euo pipefail
-            ROOT=/opt/star45/voiceflow-smart-workspace
-            SCRIPT=/tmp/restore-local-whisper-${{ github.run_id }}.sh
-            trap 'rm -f "$SCRIPT"' EXIT
-            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 801fe2135a8126ab5723a46af8eaa205e4f250f0
-            git -C "$ROOT" -c safe.directory="$ROOT" show 801fe2135a8126ab5723a46af8eaa205e4f250f0:ops/restore-local-whisper-sidecar.sh > "$SCRIPT"
-            chmod 700 "$SCRIPT"
-            RUN_KEY=${{ github.run_id }} bash "$SCRIPT"
+            echo '=== CAPACITY ==='
+            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            uptime
+            free -m
+            df -h /
+
+            echo '=== NGINX_VOICE_FILES ==='
+            find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 2 -type f -o -type l 2>/dev/null | while read -r f; do
+              if grep -qE 'server_name[[:space:]]+voice\.star45\.net' "$f" 2>/dev/null; then
+                echo "FILE=$f REAL=$(readlink -f "$f")"
+                grep -nE 'server_name|location|proxy_pass|root |return 308|return 410' "$f" | head -120
+              fi
+            done
+            echo "VOICE_SERVER_FILE_COUNT=$(grep -RIlE 'server_name[[:space:]]+voice\.star45\.net' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | wc -l | tr -d ' ')"
+            nginx -t 2>&1
+
+            echo '=== PM2_AND_PORTS ==='
+            PM2_HOME=/root/.pm2 pm2 list || true
+            PM2_HOME=/root/.pm2 pm2 describe voice 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
+            PM2_HOME=/root/.pm2 pm2 describe voice-core-full 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
+            ss -ltnp | grep -E ':(3005|3006|4186|4190)([[:space:]]|$)' || true
+            test -f /root/.pm2/dump.pm2 && sha256sum /root/.pm2/dump.pm2 || true
+
+            echo '=== LOCAL_STT ==='
+            docker inspect voiceflow-local-stt --format 'STATE={{.State.Status}} RESTARTS={{.RestartCount}} POLICY={{.HostConfig.RestartPolicy.Name}} IMAGE={{.Image}} NETWORK={{.HostConfig.NetworkMode}}' || true
+            echo "LOCAL_STT_ROOT=$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:4186/ || true)"
+
+            echo '=== PRODUCTION_DATA ==='
+            DATA=/opt/star45/voiceflow-data
+            stat -c 'PATH=%n OWNER=%U:%G MODE=%a SIZE=%s' "$DATA" "$DATA/settings.json" 2>/dev/null || true
+            du -sh "$DATA" 2>/dev/null || true
+            node -e "const fs=require('fs');const d=process.argv[1],out={};for(const n of ['users','sessions','meetings','captions','events','results','tasks','consents']){try{const x=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8'));out[n]=Array.isArray(x)?x.length:'object'}catch(e){out[n]='error:'+e.code}}console.log(JSON.stringify(out))" "$DATA"
+            find "$DATA" -maxdepth 1 -type f -printf '%f %s bytes %TY-%Tm-%Td %TH:%TM:%TS\n' | sort
+
+            echo '=== CURRENT_PUBLIC ==='
+            curl -sS --max-time 10 https://voice.star45.net/api/health
+            echo
+            echo "ROOT=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/)"
+            echo "DO=$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)"
+            echo 'PREFLIGHT_COMPLETE=YES'
