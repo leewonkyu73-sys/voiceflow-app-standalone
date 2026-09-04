@@ -1,0 +1,23 @@
+{
+  "name": "voiceflow-app-standalone",
+  "version": "2.6.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "start:v2": "node server-v2.mjs",
+    "start:board": "node services/board-service.mjs",
+    "start:tasks": "node services/task-calendar-service.mjs",
+    "start:ai-employees": "node services/ai-employee-service.mjs",
+    "start:connectors": "node services/hermes-obsidian-discord-service.mjs",
+    "start:meeting-results": "node services/meeting-result-drive-service.mjs",
+    "start:admin-integrations": "node services/admin-integration-service.mjs",
+    "start:automation": "node services/automation-worker.mjs",
+    "start:voice-clone": "node services/voice-clone-service.mjs",
+    "start:voice-gpu-worker": "node workers/voice-gpu-pc-worker.mjs",
+    "test": "node meeting-max-participants.test.mjs && node meeting-invite-qr.test.mjs && node local-stt-adapter.test.mjs && node gemini-transcribe-adapter.test.mjs && node stt-runtime-routing-isolation.test.mjs && node speech-quality-provider-adapters.test.mjs && node speech-quality-lab-service.test.mjs && node speech-quality-deploy-contract.test.mjs && node frontend-v4/tests/phase1-state-caption.test.mjs && node frontend-v4/tests/phase1-isolation.test.mjs && node frontend-v4/tests/phase15-api-adapter.test.mjs && node frontend-v4/tests/phase2-mobile-caption-session.test.mjs && node frontend-v4/tests/phase2-mobile-media-session.test.mjs && node frontend-v4/tests/phase2-mobile-speech-session.test.mjs && node frontend-v4/tests/phase2-mobile-browser-speech-session.test.mjs && node frontend-v4/tests/phase2-mobile-off-route.test.mjs && node frontend-v4/tests/phase4-mobile-input-modes.test.mjs && node frontend-v4/tests/phase4-mobile-local-stt-route.test.mjs && node frontend-v4/tests/phase5-speech-provider-contract.test.mjs && node frontend-v4/tests/phase5-speech-quality-evaluator.test.mjs && node frontend-v4/tests/phase5-speech-quality-benchmark.test.mjs && node frontend-v4/tests/phase5-speech-provider-selection.test.mjs && node frontend-v4/tests/phase5-speech-quality-lab-route.test.mjs && node v4-mobile-production-entry.test.mjs && node caption-idempotency-api.test.mjs && node turn-deploy-trigger.test.mjs && node test.mjs && node peer-video-participant-sync.test.mjs && node external-audio-capture.test.mjs && node stt-usage-dashboard.test.mjs && node voice-core-stability.test.mjs && node deploy-runtime-guard.test.mjs && node meeting-auto-dispatch.test.mjs && node nfc-admin.test.mjs && node provider-router.test.mjs && node modules/voice-clone/voice-clone.test.mjs && node modules/voice-clone/worker-protocol.test.mjs && node shared-hub-provider.test.mjs && node provider-hub-app-token.test.mjs && node provider-hub-access.test.mjs && node skill-distribution.test.mjs && node skill-registry.test.mjs && node existing-deepl-recovery.test.mjs && node hermes-job-state.test.mjs && node skill-release.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

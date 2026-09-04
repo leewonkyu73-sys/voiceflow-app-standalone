@@ -1,0 +1,91 @@
+/* VoiceFlow mobile video preview layout v3.5.5 — UI only. */
+@media (max-width:760px), ((hover:none) and (pointer:coarse)){
+  .vf-video-setup{
+    display:flex!important;
+    align-items:flex-start!important;
+    justify-content:center!important;
+    overflow-y:auto!important;
+    padding:
+      max(10px,env(safe-area-inset-top))
+      10px
+      max(14px,calc(env(safe-area-inset-bottom) + 10px))!important;
+    overscroll-behavior:contain;
+  }
+  .vf-video-setup-card{
+    width:100%!important;
+    max-width:520px!important;
+    max-height:calc(100dvh - max(24px,env(safe-area-inset-top) + env(safe-area-inset-bottom)))!important;
+    margin:auto 0!important;
+    padding:14px!important;
+    overflow-y:auto!important;
+    border-radius:18px!important;
+    overscroll-behavior:contain;
+  }
+  .vf-video-setup-head{
+    align-items:center!important;
+    margin-bottom:9px!important;
+  }
+  .vf-video-setup-head h2{
+    margin-top:2px!important;
+    font-size:19px!important;
+    line-height:1.2!important;
+  }
+  .vf-video-setup-head button{
+    flex:0 0 40px!important;
+    width:40px!important;
+    height:40px!important;
+  }
+  .vf-video-browser-note{
+    margin-bottom:9px!important;
+    padding:8px 10px!important;
+  }
+  .vf-video-browser-note span{font-size:11px!important}
+  .vf-video-preview-wrap{
+    aspect-ratio:16/9!important;
+    max-height:34dvh!important;
+    min-height:180px!important;
+    border-radius:14px!important;
+  }
+  .vf-video-preview-wrap video{
+    object-fit:cover!important;
+    object-position:center bottom!important;
+  }
+  .vf-video-setup-card>p{
+    margin:9px 2px!important;
+    font-size:12px!important;
+    line-height:1.42!important;
+  }
+  .vf-video-choice{
+    position:sticky!important;
+    bottom:0!important;
+    z-index:2!important;
+    display:grid!important;
+    grid-template-columns:1fr 1fr!important;
+    gap:7px!important;
+    margin:0 -2px -2px!important;
+    padding:8px 2px 2px!important;
+    background:#fff!important;
+  }
+  .vf-video-choice button{
+    min-width:0!important;
+    min-height:44px!important;
+    padding:7px 8px!important;
+    font-size:12px!important;
+    white-space:normal!important;
+  }
+  #videoSendApprove{
+    order:-1!important;
+    grid-column:1/-1!important;
+    min-height:48px!important;
+    font-size:14px!important;
+  }
+  #videoNameplateOnly{order:0!important}
+  #videoSendReject{order:1!important}
+}
+@media (max-height:620px) and (orientation:landscape){
+  .vf-video-setup-card{margin:0!important}
+  .vf-video-preview-wrap{
+    min-height:140px!important;
+    max-height:30dvh!important;
+  }
+}

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko" data-voiceflow-page="speech-quality-lab-v1">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=0.5,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
+  <meta name="theme-color" content="#10213b" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10213b" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="VoiceFlow 품질시험">
+  <title>VoiceFlow · 음성 품질 비교</title>
+  <link rel="manifest" href="/v4/speech-quality-lab/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/voiceflow-icon-192.png">
+  <link rel="stylesheet" href="/v4/speech-quality-lab/styles.css">
+</head>
+<body>
+  <main class="lab-shell">
+    <header class="app-header">
+      <div>
+        <span class="eyebrow">격리 시험 · 운영 미연결</span>
+        <h1>스마트폰 Chrome 음성 품질 비교</h1>
+        <p>한 번 녹음한 같은 음원을 선택한 STT 제공자에 순서대로 보냅니다.</p>
+      </div>
+      <nav aria-label="화면 이동">
+        <button id="installPwa" type="button" hidden>설치</button>
+        <a href="/?classic=1">PC 기준 홈</a>
+      </nav>
+      <p id="iosInstallHint" class="ios-install-hint" hidden>iPhone: Safari 공유 버튼 → 홈 화면에 추가 → 추가</p>
+    </header>
+
+    <section class="safety-card" aria-labelledby="safetyTitle">
+      <div>
+        <span class="step">보호 기준</span>
+        <h2 id="safetyTitle">원문 인식만 시험합니다</h2>
+      </div>
+      <ul>
+        <li>번역·회의정리·LLM 보정은 호출하지 않습니다.</li>
+        <li>녹음은 이 화면의 메모리에만 두며 새로고침하면 사라집니다.</li>
+        <li>API는 관리자 허용목록·키·세션 동의가 모두 있어야 실행됩니다.</li>
+      </ul>
+    </section>
+
+    <section class="panel" aria-labelledby="providerTitle">
+      <div class="panel-heading">
+        <div><span class="step">1</span><h2 id="providerTitle">비교할 STT</h2></div>
+        <span id="loginState" class="badge neutral">로그인 확인 중</span>
+      </div>
+      <div id="providerList" class="provider-list" aria-live="polite">
+        <p class="empty">제공자 상태를 확인하고 있습니다.</p>
+      </div>
+      <p class="help">`준비됨`인 항목만 선택할 수 있습니다. 키 값은 화면이나 응답에 표시하지 않습니다.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="sampleTitle">
+      <div class="panel-heading">
+        <div><span class="step">2</span><h2 id="sampleTitle">기준 문장</h2></div>
+        <span id="coverageState" class="badge neutral">발화 0/4 · 무음 0/1</span>
+      </div>
+      <div id="presetList" class="preset-list" role="list" aria-label="시험 문장">
+        <button type="button" data-preset="meeting">회의 시간</button>
+        <button type="button" data-preset="numbers">숫자·금액</button>
+        <button type="button" data-preset="names">이름·회사명</button>
+        <button type="button" data-preset="sentences">연속 두 문장</button>
+        <button type="button" data-preset="silence">5초 무음</button>
+      </div>
+      <div class="field-grid">
+        <label>시작 언어
+          <select id="sourceLanguage">
+            <option value="ko-KR">한국어</option>
+            <option value="vi-VN">Tiếng Việt</option>
+            <option value="en-US">English</option>
+          </select>
+        </label>
+        <label>샘플 종류
+          <select id="sampleKind">
+            <option value="speech">발화</option>
+            <option value="silence">무음</option>
+          </select>
+        </label>
+      </div>
+      <label>말할 기준 원문
+        <textarea id="referenceText" rows="3" spellcheck="false">오늘 회의는 오전 10시 30분에 시작합니다.</textarea>
+      </label>
+      <label>필수 단어 <small>(쉼표로 구분)</small>
+        <input id="keywords" value="회의, 오전, 시작">
+      </label>
+    </section>
+
+    <section class="panel" aria-labelledby="recordingTitle">
+      <div class="panel-heading">
+        <div><span class="step">3</span><h2 id="recordingTitle">한 번 녹음</h2></div>
+        <span id="recordingState" class="badge neutral">대기</span>
+      </div>
+      <div class="record-actions">
+        <button id="startRecording" class="primary" type="button">말하기 시작</button>
+        <button id="stopRecording" type="button" disabled>말하기 완료</button>
+        <button id="discardRecording" type="button" disabled>녹음 버리기</button>
+      </div>
+      <p id="recordingInfo" class="status-line" role="status">마이크 권한을 허용한 뒤 기준 문장을 그대로 말하세요.</p>
+      <audio id="audioPreview" controls hidden></audio>
+    </section>
+
+    <section class="panel run-panel" aria-labelledby="runTitle">
+      <div class="panel-heading">
+        <div><span class="step">4</span><h2 id="runTitle">순차 비교</h2></div>
+        <span class="badge warning">API 비용 가능</span>
+      </div>
+      <label class="consent-row">
+        <input id="audioConsent" type="checkbox">
+        <span><b>이번 시험 녹음을 선택한 STT 제공자에 전송하는 데 동의합니다.</b><small>동의는 새로고침 후 유지되지 않습니다. VoiceFlow는 이 시험 녹음을 저장하지 않습니다.</small></span>
+      </label>
+      <button id="runBenchmark" class="run-button" type="button" disabled>같은 녹음으로 비교 실행</button>
+      <p id="runStatus" class="status-line" role="status">녹음·제공자 선택·세션 동의가 필요합니다.</p>
+    </section>
+
+    <section class="panel result-panel" aria-labelledby="resultTitle">
+      <div class="panel-heading">
+        <div><span class="step">결과</span><h2 id="resultTitle">원문·정확도·속도</h2></div>
+        <button id="resetResults" type="button">결과 초기화</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>제공자</th><th>상태</th><th>인식 원문</th><th>CER</th><th>숫자</th><th>필수 단어</th><th>지연</th><th>비용</th></tr></thead>
+          <tbody id="resultRows"><tr><td colspan="8" class="empty">아직 실행한 결과가 없습니다.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="help">최종 PASS에는 서로 다른 발화 4개와 무음 1개가 모두 필요합니다. 한 항목이라도 환각·숫자 오류·빈 원문이면 즉시 FAIL입니다.</p>
+    </section>
+  </main>
+  <script type="module" src="/v4/speech-quality-lab/app.mjs"></script>
+</body>
+</html>

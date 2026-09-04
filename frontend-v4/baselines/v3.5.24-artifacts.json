@@ -1,0 +1,11 @@
+{
+  "operating_commit": "traffic-guard-v372",
+  "app_version": "3.5.24",
+  "service_worker": "v350",
+  "sha256": {
+    "public/app.js": "ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04",
+    "public/index.html": "1557816de2ac838b1399e88194716104d70ee82088ea2f575af0a3cbdfbe4d03",
+    "public/sw.js": "f0baeb85438c2fd0890ec737f596f8bc29556b57c240ffaa338f88b67ddc508d",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

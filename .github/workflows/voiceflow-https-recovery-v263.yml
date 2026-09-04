@@ -1,0 +1,50 @@
+name: VoiceFlow HTTPS Recovery v263 - ONE TIME FIXED
+on:
+  workflow_dispatch:
+jobs:
+  recovery:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 8
+    steps:
+      - name: 0. Discover Core and Edge
+        run: |
+          echo "=== docker ps ==="
+          docker ps | grep -i voiceflow || docker ps
+          echo "=== ports ==="
+          ss -tlnp | grep -E "4180|3000|8000|8080|9000" || netstat -tlnp | head -n 50 || true
+          echo "=== try health checks ==="
+          for port in 4180 3000 8000 8080 9000; do echo -n "try $port: "; curl -sf http://127.0.0.1:$port/api/health && echo " OK $port" && echo "CORE_PORT=$port" >> $GITHUB_ENV && break || echo " fail"; done
+          if [ -z "$CORE_PORT" ]; then echo "CORE_PORT not found, will continue to edge check"; echo "CORE_PORT=4180" >> $GITHUB_ENV; fi
+
+      - name: 1. Check Core health dynamic
+        run: |
+          echo "Checking port $CORE_PORT"
+          curl -v http://127.0.0.1:${CORE_PORT}/api/health || curl -v http://127.0.0.1:${CORE_PORT}/health || echo "Core health endpoint not responding but continue"
+
+      - name: 2. Check external cert BEFORE restart
+        run: |
+          echo "--- BEFORE ---"
+          echo | openssl s_client -connect voice.star45.net:443 -servername voice.star45.net 2>&1 | head -n 50 || true
+          if echo | openssl s_client -connect voice.star45.net:443 -servername voice.star45.net 2>&1 | grep -q "BEGIN CERTIFICATE"; then echo "CERT_MISSING=false" >> $GITHUB_ENV; else echo "CERT_MISSING=true" >> $GITHUB_ENV; fi
+          echo "CERT_MISSING=$CERT_MISSING"
+
+      - name: 3. Restart edge container only if cert missing
+        if: env.CERT_MISSING == 'true'
+        run: |
+          echo "Restarting edge"
+          docker ps -a | grep -E "voiceflow.*edge|public-edge" || true
+          docker restart voiceflow-public-edge-v262 || docker restart $(docker ps -a --format "{{.Names}}" | grep -i edge | head -n1) || echo "edge not found"
+          sleep 8
+          docker ps | grep -i edge || docker ps | head -n 20
+
+      - name: 4. Wait 60s verify
+        run: |
+          for i in $(seq 1 12); do echo "check $i/12 $(date)"; sleep 5; if echo | openssl s_client -connect voice.star45.net:443 -servername voice.star45.net 2>&1 | grep -q "BEGIN CERTIFICATE"; then echo "CERT_RECOVERED"; echo | openssl s_client -connect voice.star45.net:443 -servername voice.star45.net -showcerts 2>&1 | openssl x509 -noout -dates -subject 2>&1 || true; curl -Ik https://voice.star45.net/app.js?v=3.5.24 | head -n 10 || true; exit 0; fi; done; echo "CERT_NOT_RECOVERED"; exit 1
+
+      - name: 5. On failure logs filtered
+        if: failure()
+        run: |
+          echo "--- edge logs ---"
+          docker logs voiceflow-public-edge-v262 --tail 1000 2>&1 | grep -i -E "voice.star45.net|ACME|certificate|TLS|error|ERR" | tail -n 200 || docker logs $(docker ps -a --format "{{.Names}}" | grep -i edge | head -n1) --tail 1000 2>&1 | tail -n 200 || true
+          echo "--- caddy/traefik logs if any ---"
+          docker ps -a | grep -i -E "caddy|traefik|proxy" || true

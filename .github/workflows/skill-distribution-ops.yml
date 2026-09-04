@@ -1,0 +1,141 @@
+name: Skill Distribution Operations
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: skill-distribution-ops-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  enable:
+    if: contains(github.event.head_commit.message, '[enable-skill-distribution]')
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 20
+    steps:
+      - name: Report activation pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"pending","context":"skill-distribution/operating","description":"Activation in progress"}'
+      - name: Sync exact production checkout
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          git fetch origin main
+          git reset --hard origin/main
+      - name: Enable and verify approved skill distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          if output=$(sh deploy/skill-distribution-control.sh enable 2>&1); then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            case "$output" in
+              *'working tree is dirty'*) code=dirty-worktree ;;
+              *'SKILL_REGISTRY_FAIL'*) code=registry ;;
+              *'main cannot be fast-forwarded'*) code=non-fast-forward ;;
+              *'connector started but'*|*'ECONNREFUSED'*) code=connector-health ;;
+              *'docker build'*|*'failed to solve'*) code=docker-build ;;
+              *) code=control-command ;;
+            esac
+            curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -d "{\"state\":\"failure\",\"context\":\"skill-distribution/failure-$code\",\"description\":\"Activation failed at $code\"}"
+            exit 1
+          fi
+      - name: Report activation success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"skill-distribution/operating","description":"Enabled and health verified"}'
+      - name: Report activation failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"failure","context":"skill-distribution/operating","description":"Activation or health verification failed"}'
+
+  disable:
+    if: contains(github.event.head_commit.message, '[disable-skill-distribution]')
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 20
+    steps:
+      - name: Sync exact production checkout
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          git fetch origin main
+          git reset --hard origin/main
+      - name: Disable skill distribution
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          sh deploy/skill-distribution-control.sh disable
+  verify-e2e:
+    needs: enable
+    if: always() && contains(github.event.head_commit.message, '[verify-skill-distribution-e2e]') && needs.enable.result == 'success'
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 10
+    steps:
+      - name: Report E2E pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"pending","context":"skill-distribution/e2e","description":"Hermes and Obsidian E2E in progress"}'
+      - name: Sync exact E2E source
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          git fetch origin "$GITHUB_SHA"
+          git reset --hard "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Verify Hermes processing and Obsidian result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_APPROVED_SHA: ${{ github.sha }}
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          if output=$(sh deploy/skill-distribution-e2e.sh 2>&1); then
+            printf '%s\n' "$output"
+          else
+            printf '%s\n' "$output"
+            case "$output" in
+              *'auth-'*|*'active-admin-session'*) code=auth ;;
+              *'hermes-'*) code=hermes ;;
+              *'obsidian-'*) code=obsidian ;;
+              *'approved-sha-mismatch'*) code=pin ;;
+              *'connector-'*) code=connector ;;
+              *) code=script ;;
+            esac
+            curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -d "{\"state\":\"failure\",\"context\":\"skill-distribution/e2e-failure-$code\",\"description\":\"Operating E2E failed at $code\"}"
+            exit 1
+          fi
+      - name: Report E2E success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"success","context":"skill-distribution/e2e","description":"Hermes processed and Obsidian result verified"}'
+      - name: Report E2E failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            -d '{"state":"failure","context":"skill-distribution/e2e","description":"Hermes or Obsidian E2E failed"}'

@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-281-android-chrome-one-shot-final-v368",
+  "app_version": "3.5.20",
+  "service_worker": "v346",
+  "sha256": {
+    "public/app.js": "1ce4895312a10e6579a270b3417c7dfd00383959a8215eb77f2b0588dcfbe831",
+    "public/index.html": "2ef7c5a7f9e32cf41feb720e8129d890a177e4f65838ebdb3328f1fd4b9bbc08",
+    "public/sw.js": "75f30616c810441a04e41521d21e1a1e4759392aa33a015c238c3e89b9778d9d",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

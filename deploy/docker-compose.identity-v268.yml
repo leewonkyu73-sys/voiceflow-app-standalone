@@ -1,0 +1,17 @@
+services:
+  voiceflow-identity-org:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-identity-org-v26
+    network_mode: host
+    command: ["node","services/identity-organization-service.mjs"]
+    environment:
+      NODE_ENV: production
+      IDENTITY_ORG_PORT: 4185
+      IDENTITY_DATA_DIR: /app/data
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+
+  voiceflow-gateway:
+    environment:
+      IDENTITY_ORG_PORT: 4185

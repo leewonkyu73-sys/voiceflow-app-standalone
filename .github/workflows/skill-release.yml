@@ -1,0 +1,115 @@
+name: STAR45 Skill Release
+
+on:
+  workflow_run:
+    workflows: ["VoiceFlow CI"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: write
+  statuses: write
+
+concurrency:
+  group: star45-skill-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Select explicit skill release
+        id: release
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$VERIFIED_SHA"
+          message=$(git log -1 --pretty=%B)
+          case "$message" in
+            *'[release-star45-skills]'*) mode=tag ;;
+            *'[publish-star45-skill-release-page]'*) mode=page ;;
+            *) echo 'No explicit skill release marker'; exit 0 ;;
+          esac
+          tag=$(node -e "const x=require('./config/skill-release.json');process.stdout.write(x.release_tag)")
+          echo "selected=true" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build immutable release manifest
+        if: steps.release.outputs.mode == 'tag'
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          node skill-release.test.mjs
+          node scripts/create-skill-release.mjs --source-root .codex/skills --commit "$VERIFIED_SHA" --config config/skill-release.json --output dist/skill-release.json
+
+      - name: Create immutable release tag
+        if: steps.release.outputs.mode == 'tag'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n 1 "$TAG")" = "$VERIFIED_SHA" || {
+              echo "SKILL_RELEASE_FAIL:tag_already_points_elsewhere"
+              exit 1
+            }
+            echo "SKILL_RELEASE_TAG_IDEMPOTENT tag=$TAG commit=$VERIFIED_SHA"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$TAG" "$VERIFIED_SHA" -m "STAR45 skills $TAG"
+            git push origin "refs/tags/$TAG"
+            echo "SKILL_RELEASE_TAG_PASS tag=$TAG commit=$VERIFIED_SHA"
+          fi
+
+      - name: Upload resolved release manifest
+        if: steps.release.outputs.mode == 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: star45-${{ steps.release.outputs.tag }}
+          path: dist/skill-release.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub release page
+        if: steps.release.outputs.selected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -eu
+          git fetch --tags --force
+          tag_commit=$(git rev-list -n 1 "$TAG")
+          test -n "$tag_commit"
+          endpoint="https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG"
+          code=$(curl -sS -o /tmp/star45-skill-release.json -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$endpoint")
+          case "$code" in
+            200) echo "SKILL_RELEASE_PAGE_IDEMPOTENT tag=$TAG commit=$tag_commit" ;;
+            404)
+              payload=$(TAG="$TAG" TAG_COMMIT="$tag_commit" node -e "process.stdout.write(JSON.stringify({tag_name:process.env.TAG,name:'STAR45 Skills '+process.env.TAG,body:'Immutable STAR45 skill release. Source commit: '+process.env.TAG_COMMIT,prerelease:false,draft:false}))")
+              curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" -d "$payload" >/tmp/star45-skill-release-created.json
+              echo "SKILL_RELEASE_PAGE_PASS tag=$TAG commit=$tag_commit"
+              ;;
+            *) cat /tmp/star45-skill-release.json; echo "SKILL_RELEASE_FAIL:release_page_http_$code"; exit 1 ;;
+          esac
+
+      - name: Report release success
+        if: steps.release.outputs.selected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          payload='{"state":"success","context":"skill-release/publish","description":"Immutable tag, manifest and release page published"}'
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$VERIFIED_SHA" -d "$payload"

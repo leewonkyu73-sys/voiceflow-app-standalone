@@ -1,0 +1,23 @@
+/* VoiceFlow completion readiness and library confirmation v3.5.3 */
+.vf-completed-tools .vf-save-success{
+  display:inline-flex;
+  align-items:center;
+  min-height:34px;
+  padding:0 12px;
+  border:1px solid #9bd9b6;
+  border-radius:10px;
+  background:#eaf8f0;
+  color:#087443;
+  font-size:13px;
+  font-weight:800;
+}
+
+@media(max-width:760px){
+  .vf-completed-tools .vf-save-success{
+    width:100%;
+    min-height:38px;
+    justify-content:center;
+    white-space:normal;
+    text-align:center;
+  }
+}

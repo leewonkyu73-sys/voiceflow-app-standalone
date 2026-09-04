@@ -1,0 +1,15 @@
+(()=>{
+  const M={ctx:null,analyser:null,timer:0,lastSignal:0,status:'idle',stream:null,level:0,peak:0,noise:0};
+  const original=navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+  if(!original)return;
+  const el=id=>document.getElementById(id);
+  const set=(id,text)=>{const n=el(id);if(n)n.textContent=text};
+  function ensureFallback(){if(el('vfQualityState')||el('vfAudioMonitor'))return;const toolbar=document.querySelector('.chat-status-row,.vf-chat-toolbar'),host=toolbar?.parentElement;if(!toolbar||!host)return;const box=document.createElement('span');box.id='vfAudioMonitor';box.className='vf-quality vf-live-mic-level';box.innerHTML='<span id="vfQualityLabel">마이크 대기</span><span class="vf-quality-bars" aria-hidden="true"><i></i><i></i><i></i></span>';const bars=box.querySelector('.vf-quality-bars');if(bars)bars.style.setProperty('display','inline-flex','important');box.classList.add('vf-audio-monitor-slot');host.insertBefore(box,toolbar.nextSibling)}
+  function paint(kind,label,level=0){ensureFallback();const q=el('vfQualityState')||el('vfAudioMonitor');if(q){q.dataset.quality=kind;q.setAttribute('aria-label',label)}set('vfQualityLabel',label);document.querySelectorAll('.vf-quality-bars i').forEach((b,i)=>{b.style.opacity=level>i*28?.95:.22})}
+  function stopMonitor(){clearInterval(M.timer);M.timer=0;try{M.ctx?.close()}catch{}M.ctx=null;M.analyser=null;M.status='stopped';paint('idle','마이크 종료')}
+  function tick(){if(!M.analyser)return;const buf=new Uint8Array(M.analyser.fftSize);M.analyser.getByteTimeDomainData(buf);let sum=0,peak=0;for(const x of buf){const v=Math.abs((x-128)/128);sum+=v*v;if(v>peak)peak=v}const rms=Math.sqrt(sum/buf.length),level=Math.min(100,Math.round(rms*360));M.level=level;M.peak=Math.round(peak*100);if(level>3)M.lastSignal=Date.now();M.noise=M.noise*.88+(level<18?level:.12*M.noise);if(peak>.96)paint('clip','입력 과다 · 거리 조정',level);else if(Date.now()-M.lastSignal>1800)paint('quiet','소리 확인 필요',level);else if(M.noise>12)paint('noise','주변 소음 있음',level);else paint('good','입력 양호',level)}
+  function startMonitor(stream){if(!stream?.getAudioTracks?.().length)return;stopMonitor();M.stream=stream;M.status='monitoring';M.lastSignal=0;paint('checking','입력 확인 중');try{M.ctx=new (window.AudioContext||window.webkitAudioContext)();const src=M.ctx.createMediaStreamSource(stream);M.analyser=M.ctx.createAnalyser();M.analyser.fftSize=256;M.analyser.smoothingTimeConstant=.72;src.connect(M.analyser);M.timer=setInterval(tick,120)}catch{paint('unknown','레벨 표시 불가')}(stream?.getAudioTracks?.()||[]).forEach(t=>t.addEventListener('ended',stopMonitor,{once:true}))}
+  navigator.mediaDevices.getUserMedia=constraints=>{const p=original(constraints);p.then(stream=>{if(constraints?.audio)setTimeout(()=>startMonitor(stream),0)}).catch(()=>paint('denied','마이크 권한 확인'));return p};
+  new MutationObserver(()=>ensureFallback()).observe(document.documentElement,{subtree:true,childList:true});
+  window.VoiceFlowAudioMonitor={get status(){return{status:M.status,recording:M.status==='monitoring',hasSignal:Date.now()-M.lastSignal<1800,level:M.level,peak:M.peak,noise:Math.round(M.noise)}},stop:stopMonitor};
+})();

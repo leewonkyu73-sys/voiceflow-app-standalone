@@ -1,0 +1,1 @@
+PC/Fold/mobile live meeting UI changed to messenger-style chat-first layout. This patch is CSS/layout only; translation and meeting APIs are unchanged.

@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-285-android-vps-local-stt-primary-v371",
+  "app_version": "3.5.23",
+  "service_worker": "v349",
+  "sha256": {
+    "public/app.js": "5cf00c54aa1119527141e207163cf3e5842f002782c3a0890621e58bc106078f",
+    "public/index.html": "dd220806be6d234c13741125e6ac8cc76242ce5b5c6024b087614523a0091e93",
+    "public/sw.js": "93aaf9d88ab8af91742b40da85d532f395569e6285f38f56970f007004e866f8",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

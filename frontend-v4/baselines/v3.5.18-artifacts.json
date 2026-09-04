@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-257-samsung-stt-ownership-v366",
+  "app_version": "3.5.18",
+  "service_worker": "v344",
+  "sha256": {
+    "public/app.js": "44a400807b9a265a529b315bc85dbe482ac8160cf7db7db0815b559a06d0d897",
+    "public/index.html": "5932fc05776955bd35a8166831c867e8bb79178ffd4387c299b9536ab9cb8181",
+    "public/sw.js": "1ff803695bc0b1f80a63b204b6dcc4da68ff9aed8ca1b3b57a8d27add24fe430",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

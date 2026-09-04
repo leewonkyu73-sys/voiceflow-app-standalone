@@ -1,0 +1,61 @@
+name: VoiceFlow Auto Heal v271 - RESTORE TRAEFIK REAL CERT
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  heal:
+    runs-on: [self-hosted, voiceflow, vps]
+    steps:
+      - name: Restore traefik with real cert
+        run: |
+          echo "=== Stop nginx proxy ==="
+          docker stop voiceflow-proxy 2>/dev/null || true
+          docker rm -f voiceflow-proxy 2>/dev/null || true
+          pkill -9 traefik 2>/dev/null || true
+          fuser -k 80/tcp 443/tcp 2>/dev/null || true
+          sleep 2
+
+          echo "=== Fix dynamic config ==="
+          SRC=$(docker inspect traefik-traefik-1 --format '{{range.Mounts}}{{if eq.Destination "/etc/traefik/dynamic"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)
+          if [ -z "$SRC" ]; then SRC=/opt/traefik/dynamic; fi
+          mkdir -p $SRC
+          cat > $SRC/voiceflow.yml <<'YML'
+          http:
+            routers:
+              voiceflow:
+                rule: "Host(`voice.star45.net`)"
+                entryPoints: ["websecure","web"]
+                service: voiceflow
+                tls:
+                  certResolver: letsencrypt
+              voiceflow-http:
+                rule: "Host(`voice.star45.net`)"
+                entryPoints: ["web"]
+                middlewares: ["redirect-to-https"]
+                service: voiceflow
+            middlewares:
+              redirect-to-https:
+                redirectScheme:
+                  scheme: https
+                  permanent: true
+            services:
+              voiceflow:
+                loadBalancer:
+                  servers:
+                    - url: "http://172.17.0.1:3005"
+          YML
+          cat $SRC/voiceflow.yml
+          chmod 644 $SRC/voiceflow.yml
+
+          echo "=== Start docker traefik ==="
+          docker start traefik-traefik-1 2>/dev/null || docker restart traefik-traefik-1
+          sleep 15
+          docker logs traefik-traefik-1 --tail 100 | tail -n 80
+          ss -tlnp | grep -E ":80|:443"
+
+          echo "=== Verify ==="
+          curl -s -o /dev/null -w "%{http_code} http://voice.star45.net/\n" http://voice.star45.net/ || true
+          curl -k -s -o /dev/null -w "%{http_code} https://voice.star45.net/ (k)\n" https://voice.star45.net/ || true
+          curl -s -o /dev/null -w "%{http_code} https://voice.star45.net/ real\n" https://voice.star45.net/ || true
+          curl -s https://voice.star45.net/api/health | head -c 200; echo

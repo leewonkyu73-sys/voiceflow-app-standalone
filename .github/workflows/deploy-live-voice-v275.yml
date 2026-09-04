@@ -1,0 +1,49 @@
+name: VoiceFlow Live v276
+
+on:
+  workflow_dispatch:
+
+
+concurrency:
+  group: voiceflow-production-rollout
+  cancel-in-progress: false
+
+jobs:
+  deploy-live:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 45
+    steps:
+      - name: Verify target workspace
+        run: |
+          test -d /opt/star45/voiceflow-smart-workspace/.git
+          cd /opt/star45/voiceflow-smart-workspace
+          git remote -v
+      - name: Run verified Voice live rollout
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          sh deploy/complete-live-voice-v275.sh
+      - name: Final process and health check
+        run: |
+          curl -fsSL https://voice.star45.net/api/health >/dev/null
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/style.css?ts=$(date +%s)" | grep -q '.bottom-nav.cols-5'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/chat-compact-overrides.css?ts=$(date +%s)" | grep -q 'scroll-padding-bottom'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/meeting-collab.js?ts=$(date +%s)" | grep -q 'meetingCollabTrigger'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/meeting-collab.css?ts=$(date +%s)" | grep -q '.mc-panel'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/?ts=$(date +%s)" | grep -q 'meeting-collab.js?v=2.8.2'
+          INDEX=$(curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/?ts=$(date +%s)")
+          grep -q 'meeting-auto-dispatch-v361.js?v=3.6.1' <<<"$INDEX"
+          grep -q 'meeting-auto-dispatch-v361.css?v=3.6.1' <<<"$INDEX"
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/meeting-auto-dispatch-v361.js?ts=$(date +%s)" | grep -q 'tasks/interpret'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/admin-nfc.js?ts=$(date +%s)" | grep -q '/api/v1/admin/nfc'
+          curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/admin-nfc.css?ts=$(date +%s)" | grep -q '.tag-row'
+          NFC_CODE=$(curl -sS -o /tmp/voiceflow-nfc-auth-check.json -w '%{http_code}' https://voice.star45.net/api/v1/admin/nfc)
+          test "$NFC_CODE" = 403
+          grep -q 'admin_required' /tmp/voiceflow-nfc-auth-check.json
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^voiceflow-device-nearby-v26 ' | grep -q 'Up'
+          TASK_HEALTH=$(curl -fsSL https://voice.star45.net/api/v1/tasks/health)
+          node -e 'const d=JSON.parse(process.argv[1]); if(d.version!=="1.1.0") process.exit(1)' "$TASK_HEALTH"
+          CODE=$(curl -sS -o /tmp/voiceflow-task-auth-check.json -w '%{http_code}' -X POST https://voice.star45.net/api/v1/tasks/interpret -H 'content-type: application/json' --data '{"text":"회의 일정"}')
+          test "$CODE" = 401
+          grep -q 'login_required' /tmp/voiceflow-task-auth-check.json
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^voiceflow-core-v26 ' | grep -q 'Up'
+          docker ps --format '{{.Names}} {{.Status}}' | grep '^voiceflow-public-edge-v262 ' | grep -q 'Up'

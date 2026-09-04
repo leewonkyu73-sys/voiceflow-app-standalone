@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-283-speech-readiness-signal-v369",
+  "app_version": "3.5.21",
+  "service_worker": "v347",
+  "sha256": {
+    "public/app.js": "7a8aef443b6eb7b7d16545dab64dfa55536dd8a73aef37a53840f96544b4790d",
+    "public/index.html": "ecb430e6622bacba26603dfc32f2ee79cb0c4a34836a48d14cf12a8df908d38e",
+    "public/sw.js": "7854260bc8755a66025ae81c19b56bf4c7904753f4ad62a94550cc4a1d6f4083",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

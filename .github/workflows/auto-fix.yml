@@ -1,0 +1,23 @@
+name: Auto Fix on VPS
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Auto restore
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          git fetch origin
+          git checkout 15b5553 -- server-v2.mjs || true
+          node --check server-v2.mjs
+          mkdir -p data
+          [ -f data/usage.json ] || echo '{"stt_tokens":0,"stt_seconds":0}' > data/usage.json
+          pm2 restart voiceflow-core --update-env || pm2 restart all
+          pm2 list

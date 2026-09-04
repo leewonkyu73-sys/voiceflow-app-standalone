@@ -1,0 +1,40 @@
+name: Android STT Fallback Isolated Test
+
+on:
+  push:
+    branches:
+      - test/android-stt-fallback-e2e-20260902
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-stt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate exact production frontend artifact
+        run: |
+          node scripts/patch-admin-drive-v262.mjs
+          node --check public/app.js
+          sha256sum public/app.js public/index.html public/sw.js public/meeting-collab.js
+      - name: Browser and server STT ownership contracts
+        run: |
+          node tests/mobile-stt-delayed-speech.test.mjs
+          node tests/mobile-server-stt-ownership.test.mjs
+          node tests/mobile-browser-vps-handoff.test.mjs
+          node local-stt-adapter.test.mjs
+      - name: Trace full frontend build contract
+        run: |
+          contract_worktree="/tmp/voiceflow-contract-${GITHUB_RUN_ID:-local}"
+          git worktree add --detach "$contract_worktree" HEAD
+          cd "$contract_worktree"
+          awk '/name: Build and validate frontend artifact/{found=1;next} found&&/^  docker:/{exit} found&&!/^        run: \|/{sub(/^          /,"");print}' .github/workflows/ci.yml > /tmp/voiceflow-build-contract.sh
+          bash -ex /tmp/voiceflow-build-contract.sh
+      - name: whisper.cpp and Silero VAD runtime
+        run: sh tests/local-stt-vad-runtime.sh

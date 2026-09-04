@@ -1,0 +1,34 @@
+name: VoiceFlow NFC Admin Live v1
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/device-nearby-tapjoin-service.mjs'
+      - 'deploy/gateway.mjs'
+      - 'public/admin-nfc.html'
+      - 'public/admin-nfc.js'
+      - 'public/admin-nfc.css'
+      - 'public/tap.html'
+      - 'public/tap.js'
+      - 'public/tap-settings.html'
+      - 'deploy/deploy-nfc-admin-v1.sh'
+      - '.github/workflows/deploy-nfc-admin-v1.yml'
+  workflow_dispatch:
+concurrency:
+  group: voiceflow-production-rollout
+  cancel-in-progress: false
+jobs:
+  deploy-nfc:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 10
+    steps:
+      - name: Verify target workspace
+        run: |
+          test -d /opt/star45/voiceflow-smart-workspace/.git
+          test -x /opt/star45/actions-runner-voiceflow/runsvc.sh
+      - name: Deploy isolated NFC module
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          git fetch origin main
+          git reset --hard origin/main
+          sh deploy/deploy-nfc-admin-v1.sh

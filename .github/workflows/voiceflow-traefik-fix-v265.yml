@@ -1,0 +1,62 @@
+name: VoiceFlow Traefik Fix v265 - AUTO FIX
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: [self-hosted, voiceflow, vps]
+    steps:
+      - name: 1. Show current state
+        run: |
+          docker ps --format "{{.Names}} {{.Ports}}"
+          ss -tlnp | grep -E ":80|:443|:3005" || netstat -tlnp | grep -E ":80|:443|:3005" || true
+          docker inspect traefik-traefik-1 --format '{{range .Mounts}}{{printf "%s -> %s\n" .Source .Destination}}{{end}}' || true
+          ls -la /opt/traefik/dynamic/ /opt/star45/traefik/dynamic/ /etc/traefik/dynamic/ 2>&1 | head -n 100
+
+      - name: 2. Stop conflicting 80 containers
+        run: |
+          docker stop ai-star45 star45-tvdp 2>/dev/null || true
+          docker ps
+
+      - name: 3. Create voiceflow.yml in ALL dynamic locations
+        run: |
+          mkdir -p /opt/traefik/dynamic /opt/star45/traefik/dynamic /etc/traefik/dynamic 2>/dev/null || true
+          cat > /opt/traefik/dynamic/voiceflow.yml <<'YML'
+          http:
+            routers:
+              voiceflow:
+                rule: "Host(`voice.star45.net`)"
+                entryPoints: ["websecure","web"]
+                service: voiceflow
+                tls:
+                  certResolver: letsencrypt
+            services:
+              voiceflow:
+                loadBalancer:
+                  servers:
+                    - url: "http://172.17.0.1:3005"
+          YML
+          cp /opt/traefik/dynamic/voiceflow.yml /opt/star45/traefik/dynamic/voiceflow.yml 2>/dev/null || true
+          cp /opt/traefik/dynamic/voiceflow.yml /etc/traefik/dynamic/voiceflow.yml 2>/dev/null || true
+          cp /opt/traefik/dynamic/voiceflow.yml /opt/star45/voiceflow-smart-workspace/voiceflow.yml 2>/dev/null || true
+          cat /opt/traefik/dynamic/voiceflow.yml
+          ls -lh /opt/traefik/dynamic/
+
+      - name: 4. Allow docker0 to host 3005
+        run: |
+          iptables -I INPUT -s 172.17.0.0/16 -p tcp --dport 3005 -j ACCEPT 2>/dev/null || true
+          iptables -I INPUT -s 172.18.0.0/16 -p tcp --dport 3005 -j ACCEPT 2>/dev/null || true
+
+      - name: 5. Restart traefik and test from inside
+        run: |
+          docker restart traefik-traefik-1
+          sleep 8
+          echo "--- traefik logs ---"
+          docker logs traefik-traefik-1 --tail 100 | grep -i -E "voiceflow|file|provider|error|ERR|Configuration" | tail -n 80 || true
+          echo "--- test from inside traefik container ---"
+          docker exec traefik-traefik-1 wget -qO- http://172.17.0.1:3005/api/health 2>&1 | head -c 300 || docker exec traefik-traefik-1 curl -s http://172.17.0.1:3005/api/health 2>&1 | head -c 300 || echo "wget/curl fail"
+          ss -tlnp | grep -E ":80|:443"
+
+      - name: 6. External verify
+        run: |
+          for i in 1 2 3 4 5 6; do echo "try $i"; curl -k -s -o /dev/null -w "%{http_code} https://voice.star45.net/ %{time_total}s\n" https://voice.star45.net/ || true; curl -k -s -o /dev/null -w "%{http_code} https://voice.star45.net/app.js %{time_total}s\n" https://voice.star45.net/app.js?v=3.5.24 || true; sleep 3; done
+          curl -s http://127.0.0.1:3005/api/health | head -c 200 || true

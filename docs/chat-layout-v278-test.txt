@@ -1,0 +1,4 @@
+CHAT_LAYOUT_V278
+Desktop messenger layout
+Fold responsive chat-first layout
+Phone compact chat-first layout

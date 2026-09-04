@@ -1,0 +1,32 @@
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json ./
+COPY server-v2.mjs ./
+COPY lib ./lib
+COPY .codex/skills ./.codex/skills
+COPY public ./public
+COPY frontend-v4/packages ./frontend-v4/packages
+COPY frontend-v4/apps ./frontend-v4/apps
+COPY services ./services
+COPY scripts ./scripts
+COPY skill-distribution.test.mjs ./skill-distribution.test.mjs
+COPY hermes-job-state.test.mjs ./hermes-job-state.test.mjs
+COPY deploy/gateway.mjs ./deploy/gateway.mjs
+COPY data ./data
+RUN echo 'PATCH live translation routing and correction APIs' && node scripts/patch-live-translation-routing-v272.mjs
+RUN echo 'CHECK server-v2.mjs' && node --check server-v2.mjs
+RUN echo 'CHECK public/app.js' && node --check public/app.js
+RUN echo 'CHECK public/admin-integrations.js' && node --check public/admin-integrations.js
+RUN echo 'CHECK services/admin-integration-service.mjs' && node --check services/admin-integration-service.mjs
+RUN echo 'CHECK services/integration-hub-bridge-service.mjs' && node --check services/integration-hub-bridge-service.mjs
+RUN echo 'CHECK services/integration-env-launcher.mjs' && node --check services/integration-env-launcher.mjs
+RUN echo 'CHECK services/meeting-result-drive-service.mjs' && node --check services/meeting-result-drive-service.mjs
+RUN echo 'CHECK lib/skill-distribution.mjs' && node --check lib/skill-distribution.mjs
+RUN echo 'CHECK skill distribution test' && node skill-distribution.test.mjs
+RUN echo 'CHECK Hermes job state test' && node hermes-job-state.test.mjs
+RUN echo 'CHECK deploy/gateway.mjs' && node --check deploy/gateway.mjs
+RUN echo 'CHECK UI bindings' && node scripts/verify-ui-bindings-v261.mjs
+ENV NODE_ENV=production
+ENV PORT=4180
+EXPOSE 4173 4175 4176 4177 4178 4179 4180 4181 4182
+CMD ["node","server-v2.mjs"]

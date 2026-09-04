@@ -1,0 +1,11 @@
+{
+  "operating_commit": "3502ce63340dfe9ec3d4e94bd10f12a3ac66753f",
+  "app_version": "3.5.17",
+  "service_worker": "v343",
+  "sha256": {
+    "public/app.js": "a9d8943a176e3ec8613bfa11705482a6149e10d3505bd4a0e7f1acead6014ffc",
+    "public/index.html": "cda0a360129b9973239544304470e943bf9d9b26911aa23d747573e0cc86db29",
+    "public/sw.js": "c25f74882aa38f480b14219e8a3a580a61c5ef303975b68d377e20fa7e2fd860",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

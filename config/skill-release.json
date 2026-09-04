@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "release_tag": "skills-v1.0.0",
+  "skills": [
+    "star45-skill-distribution"
+  ],
+  "targets": [
+    {
+      "repository": "leewonkyu73-sys/star45-deployment-center",
+      "branch": "main",
+      "install_root": "skills"
+    },
+    {
+      "repository": "leewonkyu73-sys/star45-hermes-work",
+      "branch": "master",
+      "install_root": "skills"
+    }
+  ]
+}

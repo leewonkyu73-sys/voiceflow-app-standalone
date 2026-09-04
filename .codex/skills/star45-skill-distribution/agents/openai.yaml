@@ -1,0 +1,4 @@
+interface:
+  display_name: "STAR45 Skill Distribution"
+  short_description: "승인된 STAR45 스킬을 Agent와 지식도구에 안전하게 배포합니다."
+  default_prompt: "GitHub의 승인된 스킬 버전을 기준으로 Codex·Hermes·Obsidian·다른 Agent 배포 계획을 만들고 검증하세요."

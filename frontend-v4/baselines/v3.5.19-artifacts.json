@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-279-android-chrome-browser-only-stt-v367",
+  "app_version": "3.5.19",
+  "service_worker": "v345",
+  "sha256": {
+    "public/app.js": "085f22862bfdcaa31827a55e8680e8e972f991a80ee08869766a0f6c510a56b7",
+    "public/index.html": "a167de411391c8bbb06969f1c3e8a85a5a6df918279a3b056f3f89df1fe205fa",
+    "public/sw.js": "6f75d95e029f51fb43253515da07d42af7897f138faf8cbe4bd5600a0d32144b",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

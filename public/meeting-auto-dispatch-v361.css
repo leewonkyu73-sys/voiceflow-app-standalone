@@ -1,0 +1,7 @@
+/* Meeting decision auto-distribution v3.6.1 */
+.vf-meeting-dispatch{margin:18px 0;padding:16px;border:1px solid #d9e3ee;border-radius:14px;background:#f8fafc}
+.vf-dispatch-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.vf-dispatch-head small{color:#64748b}.vf-dispatch-head h3{margin:3px 0}.vf-dispatch-head>span{padding:5px 9px;border-radius:999px;background:#e2e8f0}
+.vf-dispatch-list{display:grid;gap:10px;margin:12px 0}.vf-dispatch-list article{padding:12px;border:1px solid #bbf7d0;border-left:5px solid #16a34a;border-radius:11px;background:#fff}.vf-dispatch-list article.needs-input{border-color:#fed7aa;border-left-color:#f97316;background:#fffaf5}
+.vf-dispatch-list header,.vf-dispatch-meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.vf-dispatch-list header span{font-size:12px;color:#475569}.vf-dispatch-list p{margin:8px 0;color:#334155}.vf-dispatch-meta{font-size:12px;color:#64748b}
+.vf-dispatch-list label{display:grid;gap:5px;margin-top:10px}.vf-dispatch-list select[multiple]{min-height:90px}.vf-invite-error{margin:8px 0;color:#c2410c;font-weight:700}
+@media(max-width:640px){.vf-meeting-dispatch{padding:12px}.vf-dispatch-list header,.vf-dispatch-meta{display:grid}.vf-dispatch-list select[multiple]{min-height:110px}}

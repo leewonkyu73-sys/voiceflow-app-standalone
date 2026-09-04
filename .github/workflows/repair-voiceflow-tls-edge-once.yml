@@ -1,0 +1,37 @@
+name: VoiceFlow Recovery Read-Only Preflight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-voiceflow-tls-edge-once.yml'
+
+jobs:
+  preflight:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 3
+    steps:
+      - name: Verify recoverable VoiceFlow assets without changes
+        run: |
+          set +e
+          root=/opt/star45/voiceflow-smart-workspace
+          echo 'RECOVERY FILES'
+          for path in "$root" "$root/.env" "$root/deploy/docker-compose.v23.yml" /opt/star45/voiceflow-data /opt/star45/voiceflow-runtime-public; do
+            if [ -e "$path" ]; then echo "present=$path"; else echo "missing=$path"; fi
+          done
+          echo 'SOURCE'
+          git -C "$root" rev-parse --short HEAD 2>/dev/null || true
+          echo 'IMAGES'
+          docker images --format '{{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}' | grep -E 'voiceflow|traefik' || true
+          echo 'COMPOSE SERVICES'
+          if [ -f "$root/.env" ] && [ -f "$root/deploy/docker-compose.v23.yml" ]; then
+            docker compose --env-file "$root/.env" -f "$root/deploy/docker-compose.v23.yml" config --services 2>&1 || true
+          fi
+          echo 'DATA SIZES'
+          du -sh /opt/star45/voiceflow-data /opt/star45/voiceflow-runtime-public 2>/dev/null || true
+          echo 'UI VERSION'
+          grep -o "const APP_VERSION='[^']*'" /opt/star45/voiceflow-runtime-public/app.js 2>/dev/null | head -1 || true
+          echo 'SYSTEM LOAD'
+          uptime
+          free -m
+          df -h /

@@ -1,0 +1,27 @@
+/* Mobile chat dock v3.5.0 — layout only; no speech or translation rules. */
+@media (max-width:650px), ((hover:none) and (pointer:coarse)){
+  .shell>main{padding-bottom:calc(210px + env(safe-area-inset-bottom))!important}
+  .vf-composer{
+    position:fixed!important;
+    left:50%!important;
+    bottom:calc(58px + env(safe-area-inset-bottom))!important;
+    z-index:45!important;
+    width:calc(100% - 16px)!important;
+    max-width:804px!important;
+    margin:0!important;
+    padding:8px!important;
+    transform:translateX(-50%)!important;
+    border:1px solid #d7e1ed!important;
+    border-radius:12px!important;
+    background:#fff!important;
+    box-shadow:0 -4px 18px #10213b1a!important
+  }
+  .vf-core-actions{
+    bottom:calc(142px + env(safe-area-inset-bottom))!important;
+    z-index:44!important
+  }
+  .vf-transcript{
+    padding-bottom:calc(176px + env(safe-area-inset-bottom))!important;
+    scroll-padding-bottom:calc(176px + env(safe-area-inset-bottom))!important
+  }
+}

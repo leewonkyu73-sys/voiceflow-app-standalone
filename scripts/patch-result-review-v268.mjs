@@ -1,0 +1,60 @@
+import fs from 'node:fs/promises';
+
+const file=new URL('../public/app.js',import.meta.url);
+let s=await fs.readFile(file,'utf8');
+const must=(re,repl,label)=>{if(!re.test(s))throw new Error(`patch_missing:${label}`);s=s.replace(re,repl)};
+
+function resultReviewV268(){
+  const r=state.meetingResult||{};
+  const mid=state.lastMeetingId;
+  const resultLanguage=state.resultLanguage||localStorage.targetLanguage||'ko-KR';
+  const localized=r.localized_results?.[resultLanguage]||r;
+  const actions=localized.actions||[],decisions=localized.decisions||[],risks=localized.risks||[];
+  const storage=r._storage||null,approvalError=r._approvalError||'';
+  const caps=state.captions||[];
+  const audioUrl=state.media.lastAudioUrl||'',videoUrl=state.media.lastVideoUrl||'';
+  const mediaSaved=state.media.originalStorageInfo||null;
+  const mediaState=state.media.originalStorage||((audioUrl||videoUrl)?'local-ready':'unknown');
+  const participants=[...new Set([...(Array.isArray(r.participants)?r.participants.map(x=>typeof x==='string'?x:x?.name):[]),...caps.map(x=>x.speaker)].map(x=>String(x||'').trim()).filter(Boolean))];
+  const startedAt=r.started_at||r.meeting_started_at||state.media.startedAt||r.created_at||Date.now();
+  const endedAt=r.ended_at||r.meeting_ended_at||r.created_at||Date.now();
+  const started=new Date(startedAt),ended=new Date(endedAt);
+  const duration=Math.max(0,Number(r.duration_seconds)||Math.round((ended-started)/1000)||state.media.elapsed||0);
+  const hasTranscript=caps.some(c=>String(c.text||'').trim());
+  const hasTranslation=caps.some(c=>String(c.translation||'').trim()&&String(c.translation||'')!==String(c.text||''));
+  const summaryText=String(localized.summary||'').trim()||'정리할 회의 내용 없음';
+  const listText=(items,key='')=>items.map(x=>typeof x==='string'?x:(key?x?.[key]:JSON.stringify(x))).map(x=>String(x||'').trim()).filter(Boolean).join('\n');
+  const mediaLabel=mediaState==='drive'?'Drive 원본 저장됨':mediaState==='saved'?'원본 저장됨':mediaState==='pending'?'원본 저장 중':mediaState==='upload-error'?'원본 저장 재시도 필요':(audioUrl||videoUrl)?'원본 파일 생성됨':'원본 파일 확인 필요';
+  const transcriptHtml=caps.length?caps.map(captionCard).join(''):'<div class="empty premium-empty"><b>실제 대화 내용 없음</b><span>이 회의에서 텍스트로 변환된 대화가 없습니다.</span></div>';
+  const mediaHtml=videoUrl?'<video controls playsinline preload="metadata" src="'+videoUrl+'" style="width:100%;max-height:360px;border-radius:14px"></video>':audioUrl?'<audio controls preload="metadata" src="'+audioUrl+'" style="width:100%"></audio>':'<p class="empty">이 기기에서 재생할 원본 URL을 찾지 못했습니다. 서버 원본 저장 상태를 확인하세요.</p>';
+  const originalOpen=mediaSaved?.drive_url||mediaSaved?.web_view_link?'<div class="actions"><button id="openOriginalMedia" class="primary compact">저장된 원본 파일 열기</button></div>':'';
+  let errorHtml='';
+  if(approvalError==='login_required')errorHtml='<div class="diag warn"><b>Google Drive 저장 전에 로그인이 필요합니다.</b><p>회의 결과와 녹음 상태는 유지됩니다. 로그인 후 이 검토 화면으로 돌아와 다시 승인하세요.</p><div class="actions"><button id="goLoginFromResult" class="primary">로그인</button><button id="retryApproveResult">다시 확인</button></div></div>';
+  else if(approvalError==='google_drive_not_configured')errorHtml='<div class="diag warn"><b>Google Drive 연결이 필요합니다.</b><p>관리자에서 Drive Connector를 연결한 뒤 다시 승인하세요.</p><div class="actions"><button id="goDriveSettings" class="primary">Drive 연결 설정</button></div></div>';
+  else if(approvalError)errorHtml='<div class="diag warn"><b>저장 처리 확인 필요</b><p>'+esc(approvalError)+'</p></div>';
+  const saveButtons=storage?'<div class="actions"><button id="openDrive" class="primary">Google Drive에서 열기</button><button data-nav="home">완료</button></div>':'<div class="actions"><button id="approveResult" class="primary">✓ 승인 · Drive 저장</button><button id="rejectResult" class="danger">저장하지 않기</button><button data-nav="home">나중에 검토</button></div>';
+  return shell(`<section class="page-head"><div><small>MEETING RESULT REVIEW</small><h1>회의결과 검토</h1></div><span class="health-score">${storage?'✓':'검토'}<small>${storage?'Drive 저장됨':'승인 전'}</small></span></section><section class="panel vf-result-info"><div class="panel-title"><h2>회의 정보</h2><span>${fmt(duration)}</span></div><div class="module-grid"><div class="module-item"><div><b>일자·시작</b><small>${started.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</small></div></div><div class="module-item"><div><b>종료</b><small>${ended.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</small></div></div><div class="module-item"><div><b>참여자</b><small>${esc(participants.join(' · ')||'참여자 정보 없음')}</small></div></div></div></section><section class="result-process-compact"><div class="result-process-title"><b>처리 상태</b><small>원본 · 전체 텍스트 · 번역 · 정리 · 저장</small></div><div class="module-grid"><div class="module-item"><div><b>${audioUrl||videoUrl||mediaSaved?'✓':'○'} 녹음·녹화 원본</b><small>${esc(mediaLabel)} · ${fmt(duration)}</small></div></div><div class="module-item"><div><b>${hasTranscript?'✓':'○'} 음성 → 텍스트</b><small>${hasTranscript?'전체 원문 '+caps.length+'건 확인':'대화 내용 없음'}</small></div></div><div class="module-item"><div><b>${hasTranslation?'✓':'○'} 자동 번역</b><small>${hasTranslation?'번역 결과 확인됨':'번역 내용 없음'}</small></div></div><div class="module-item"><div><b>${r.summary?'✓':'○'} 회의내용 정리</b><small>${r.summary?'실제 대화 기반 정리됨':'정리할 내용 없음'}</small></div></div><div class="module-item"><div><b>${storage?'✓':'○'} Google Drive</b><small>${storage?'공식 원본 저장 완료':'승인 후 공식 저장'}</small></div></div></div></section><section class="panel elevated"><div class="panel-title"><div><small>ORIGINAL RECORDING</small><h2>녹음 · 녹화 원본 재생</h2></div><span>${esc(mediaLabel)}</span></div>${mediaHtml}${originalOpen}</section><section class="panel elevated"><div class="panel-title"><div><small>FULL TRANSCRIPT & TRANSLATION</small><h2>전체 대화 · 텍스트 변환 · 번역</h2></div><span>${caps.length}건</span></div>${transcriptHtml}</section><section class="panel elevated vf-result-editor"><div class="panel-title"><div><small>TEXT BASED EDITOR</small><h2>회의내용 정리 · 편집</h2></div><label class="result-language-select">정리 언어<select id="resultLanguage"><option value="ko-KR">한국어</option><option value="vi-VN">Tiếng Việt</option><option value="en-US">English</option><option value="zh-CN">中文</option></select></label><span>${r._draftSaved?'저장됨':'편집 가능'}</span></div><label>회의내용 정리<textarea id="resultSummaryEdit" class="result-summary-edit" aria-label="회의내용 정리 편집">${esc(summaryText)}</textarea></label><div class="admin-grid"><label>결정사항 <small>한 줄에 한 항목</small><textarea id="resultDecisionsEdit" class="result-list-edit" aria-label="결정사항 편집">${esc(listText(decisions))}</textarea></label><label>확인사항 <small>한 줄에 한 항목</small><textarea id="resultRisksEdit" class="result-list-edit" aria-label="확인사항 편집">${esc(listText(risks))}</textarea></label></div><label>실행사항 <small>한 줄에 한 항목</small><textarea id="resultActionsEdit" class="result-list-edit" aria-label="실행사항 편집">${esc(listText(actions,'text'))}</textarea></label><div class="actions"><button id="saveResultDraft" class="primary">편집내용 저장</button></div></section><section class="panel elevated"><h2>공식 저장</h2><p>승인된 회의결과만 Google Drive에 공식 원본으로 저장됩니다. ERP/DB에는 Drive 파일 ID와 URL만 참조합니다.</p>${errorHtml}${saveButtons}<p class="small">Meeting ID: ${esc(mid||'')}</p></section>`);
+}
+
+const resultReviewSource=resultReviewV268.toString().replace('resultReviewV268','resultReview');
+must(/function resultReview\(\)\{.*?\}\nfunction joinPage/s,resultReviewSource+'\nfunction joinPage','result-review-verification-ui');
+
+const oldApprove="  $('#approveResult')?.addEventListener('click',async()=>{if(!state.lastMeetingId)return;try{const d=await api(`/api/v1/meeting-results/${state.lastMeetingId}/approve`,{method:'POST',body:'{}'});state.meetingResult={...(state.meetingResult||{}),_storage:d.data?.drive||null};render()}catch(e){alert(e.message==='google_drive_not_configured'?'Google Drive 연결 설정이 필요합니다. 관리자에서 Drive Connector를 연결해주세요.':'회의결과 저장 실패: '+e.message)}});";
+const newApprove="  $('#approveResult')?.addEventListener('click',async()=>{if(!state.lastMeetingId)return;if(!state.user){state.meetingResult={...(state.meetingResult||{}),_approvalError:'login_required'};render();return}try{state.meetingResult={...(state.meetingResult||{}),_approvalError:''};const d=await api('/api/v1/meeting-results/'+encodeURIComponent(state.lastMeetingId)+'/approve',{method:'POST',body:'{}'});state.meetingResult={...(state.meetingResult||{}),_storage:d.data?.drive||null,_approvalError:''};render()}catch(e){state.meetingResult={...(state.meetingResult||{}),_approvalError:e.message||'save_failed'};render()}});";
+if(!s.includes(oldApprove))throw new Error('patch_missing:approval-login-safe');
+s=s.replace(oldApprove,newApprove);
+
+const oldOpen="  $('#openDrive')?.addEventListener('click',()=>{const u=state.meetingResult?._storage?.drive_url;if(u)window.open(u,'_blank','noopener')});";
+const newOpen=oldOpen+"\n  $('#saveResultDraft')?.addEventListener('click',async()=>{if(!state.lastMeetingId)return;const summary=$('#resultSummaryEdit')?.value?.trim()||'';const rows=id=>($('#'+id)?.value||'').split(/\\n+/).map(x=>x.trim()).filter(Boolean);const decisions=rows('resultDecisionsEdit'),risks=rows('resultRisksEdit'),actions=rows('resultActionsEdit').map((text,i)=>({...((state.meetingResult?.actions||[])[i]||{}),text}));try{const d=await api('/api/v1/meeting-results/'+encodeURIComponent(state.lastMeetingId)+'/draft',{method:'PATCH',body:JSON.stringify({language:state.resultLanguage||localStorage.targetLanguage||'ko-KR',summary,decisions,risks,actions})});state.meetingResult={...(state.meetingResult||{}),...(d.data?.result||{}),_draftSaved:true};render()}catch(e){alert('수정내용 반영 실패: '+e.message)}});\n  const resultLanguage=$('#resultLanguage');if(resultLanguage){resultLanguage.value=state.resultLanguage||localStorage.targetLanguage||'ko-KR';resultLanguage.onchange=async()=>{state.resultLanguage=resultLanguage.value;try{const d=await api('/api/v1/meetings/'+encodeURIComponent(state.lastMeetingId)+'/result/localize',{method:'POST',body:JSON.stringify({language:state.resultLanguage})});state.meetingResult=d.data||state.meetingResult;render()}catch(e){alert('선택 언어 정리 실패: '+e.message)}}}\n  $('#openOriginalMedia')?.addEventListener('click',()=>{const u=state.media.originalStorageInfo?.drive_url||state.media.originalStorageInfo?.web_view_link;if(u)window.open(u,'_blank','noopener')});\n  $('#goLoginFromResult')?.addEventListener('click',()=>{state.view='account';render()});\n  $('#retryApproveResult')?.addEventListener('click',()=>{$('#approveResult')?.click()});\n  $('#goDriveSettings')?.addEventListener('click',()=>{location.href='/drive-connect.html'});";
+if(!s.includes(oldOpen))throw new Error('patch_missing:result-review-extra-bind');
+s=s.replace(oldOpen,newOpen);
+
+must(/state\.user=\(await api\('\/api\/v1\/auth\/login'.*?\)\)\.user;state\.view='home';render\(\)/s,
+match=>match.replace("state.view='home'","state.view=state.lastMeetingId?'result-review':'home'"),'return-review-after-login');
+
+must(/  \$\('#rejectResult'\)\?\.addEventListener\('click',async\(\)=>\{[^\n]+\);/,
+"  $('#rejectResult')?.addEventListener('click',async()=>{if(!state.lastMeetingId)return;if(!confirm('이 녹음은 공식 저장하지 않습니다. 계속할까요?'))return;try{await api(`/api/v1/meeting-results/${state.lastMeetingId}/reject`,{method:'POST',body:JSON.stringify({reason:'recording_mistake'})});try{if(state.media.lastAudioUrl?.startsWith('blob:'))URL.revokeObjectURL(state.media.lastAudioUrl);if(state.media.lastVideoUrl?.startsWith('blob:'))URL.revokeObjectURL(state.media.lastVideoUrl)}catch{}state.media.lastAudioUrl='';state.media.lastVideoUrl='';state.view='home';render()}catch(e){alert('처리 실패: '+e.message)}});",'discard-recording-safe');
+
+await fs.writeFile(file,s,'utf8');
+new Function(s);
+console.log('VoiceFlow result review v2.6.8 verification + login-safe approval applied');

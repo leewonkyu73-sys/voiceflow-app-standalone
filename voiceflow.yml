@@ -1,0 +1,13 @@
+http:
+  routers:
+    voiceflow:
+      rule: "Host(`voice.star45.net`)"
+      entryPoints: ["websecure","web"]
+      service: voiceflow
+      tls:
+        certResolver: letsencrypt
+  services:
+    voiceflow:
+      loadBalancer:
+        servers:
+          - url: "http://172.17.0.1:3005"

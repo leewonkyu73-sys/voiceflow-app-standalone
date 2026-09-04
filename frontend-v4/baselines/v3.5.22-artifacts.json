@@ -1,0 +1,11 @@
+{
+  "operating_commit": "PR-285-android-browser-vps-stt-handoff-v370",
+  "app_version": "3.5.22",
+  "service_worker": "v348",
+  "sha256": {
+    "public/app.js": "acdcfd75f90cff27dcf2c9d8459c1bee2ccdfb4dcae5d60efac0a1ced349f504",
+    "public/index.html": "8b61be3269d30cc790c745a1e146e44d44620fd3d9509e4ab01deb739fab31f5",
+    "public/sw.js": "37abade23b4101fff38b8c0e3816968873b4d1efd1725b684edeaef0d23ad550",
+    "public/meeting-collab.js": "16ebb221021721d263441371d9f33b5e99ce3bd7463e5ea090689e747bc584b5"
+  }
+}

@@ -1,0 +1,46 @@
+name: VoiceFlow Tasks Live v361
+
+on:
+  workflow_dispatch:
+
+
+concurrency:
+  group: voiceflow-production-rollout
+  cancel-in-progress: false
+
+jobs:
+  deploy-tasks:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 10
+    steps:
+      - name: Verify deployment workspace
+        run: |
+          test -d /opt/star45/voiceflow-smart-workspace/.git
+          cd /opt/star45/voiceflow-smart-workspace
+          git config --global --add safe.directory /opt/star45/voiceflow-smart-workspace >/dev/null 2>&1 || true
+          git fetch origin main
+          git reset --hard origin/main
+      - name: Publish meeting auto-dispatch UI
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          sh deploy/fast-ui-sync-v271.sh
+      - name: Roll out task service with rollback
+        run: |
+          cd /opt/star45/voiceflow-smart-workspace
+          TASK_VERIFY_CMD='HEALTH=$(curl -fsSL http://127.0.0.1:4176/health); printf "%s" "$HEALTH" | node -e "let s=\"\";process.stdin.on(\"data\",c=>s+=c);process.stdin.on(\"end\",()=>{const d=JSON.parse(s);if(d.version!==\"1.1.0\")process.exit(1)})"; CODE=$(curl -sS -o /tmp/voiceflow-task-auth-check.json -w "%{http_code}" -X POST http://127.0.0.1:4176/api/v1/tasks/interpret -H "content-type: application/json" --data "{\"text\":\"회의 일정\"}"); [ "$CODE" = "401" ]; grep -q "login_required" /tmp/voiceflow-task-auth-check.json'
+          FAST_CORE_VERIFY_CMD="$TASK_VERIFY_CMD" \
+          FAST_CORE_PUBLIC_VERIFY_CMD="curl -fsSL 'https://voice.star45.net/api/v1/tasks/health' | grep -q '\"version\":\"1.1.0\"'" \
+            sh scripts/star45-fast-core-deploy.sh \
+            voiceflow-tasks-v26 \
+            http://127.0.0.1:4176/health \
+            services/task-calendar-service.mjs
+      - name: Verify production contract
+        run: |
+          INDEX=$(curl -fsSL -H 'Cache-Control: no-cache' "https://voice.star45.net/?ts=$(date +%s)")
+          grep -q 'meeting-auto-dispatch-v361.js?v=3.6.1' <<<"$INDEX"
+          grep -q 'meeting-auto-dispatch-v361.css?v=3.6.1' <<<"$INDEX"
+          curl -fsSL https://voice.star45.net/api/v1/tasks/health | grep -q '"version":"1.1.0"'
+          CODE=$(curl -sS -o /tmp/voiceflow-task-public-auth.json -w '%{http_code}' -X POST https://voice.star45.net/api/v1/tasks/interpret -H 'content-type: application/json' --data '{"text":"회의 일정"}')
+          test "$CODE" = 401
+          grep -q 'login_required' /tmp/voiceflow-task-public-auth.json
+          curl -fsSL https://voice.star45.net/api/health >/dev/null

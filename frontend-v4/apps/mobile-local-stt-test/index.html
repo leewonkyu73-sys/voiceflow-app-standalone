@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko" data-v4-mobile="local-stt-pwa-canary-v1">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=0.5,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
+  <meta name="theme-color" content="#10213b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="VoiceFlow 음성">
+  <title>VoiceFlow · 휴대폰 음성 입력 시험</title>
+  <link rel="manifest" href="/v4/local-stt-test/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/voiceflow-icon-192.png">
+  <link rel="stylesheet" href="/v4/local-stt-test/base.css">
+  <link rel="stylesheet" href="/v4/local-stt-test/styles.css">
+</head>
+<body>
+  <section id="consentGate" class="consent-gate" aria-labelledby="consentTitle">
+    <div class="consent-card">
+      <span class="eyebrow">VOICEFLOW INVITE</span>
+      <h1 id="consentTitle">가입·동의 후 회의에 참여합니다</h1>
+      <p>앱을 설치하거나 초대 회의에 참여하려면 회원가입과 필수 약관 동의가 필요합니다. 서버 음성인식 동의는 여기에 포함되지 않으며, 사용할 때 별도로 받습니다.</p>
+
+      <form id="registrationForm" class="auth-form">
+        <label>이름<input name="name" autocomplete="name" minlength="2" required></label>
+        <label>이메일<input name="email" type="email" autocomplete="email" required></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <label class="check-row"><input name="termsAccepted" type="checkbox" required> <span><a href="/terms" target="_blank" rel="noopener">이용약관</a>에 동의합니다. (필수)</span></label>
+        <label class="check-row"><input name="privacyAccepted" type="checkbox" required> <span><a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>에 동의합니다. (필수)</span></label>
+        <label class="check-row"><input name="marketingAccepted" type="checkbox"> <span>서비스 소식 수신에 동의합니다. (선택)</span></label>
+        <button type="submit">동의하고 가입·참여</button>
+      </form>
+
+      <details class="login-panel">
+        <summary>이미 가입했다면 로그인</summary>
+        <form id="loginForm" class="auth-form compact">
+          <label>이메일<input name="email" type="email" autocomplete="email" required></label>
+          <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit">로그인하고 참여</button>
+        </form>
+      </details>
+      <p id="authStatus" class="gate-status" role="status">가입 여부를 확인하고 있습니다.</p>
+    </div>
+  </section>
+
+  <main id="meetingApp" class="mobile-shell local-test-shell" hidden>
+    <header class="app-header">
+      <div class="room-title">
+        <span class="eyebrow">LOCAL STT CANARY</span>
+        <h1>음성메모 · 입력 방식 선택</h1>
+      </div>
+      <div class="header-actions">
+        <button id="installPwa" type="button" hidden>앱 설치</button>
+        <a class="home-link" href="/?classic=1">홈으로</a>
+      </div>
+    </header>
+
+    <section class="input-mode-panel" aria-labelledby="inputModeTitle">
+      <div class="panel-heading">
+        <div><strong id="inputModeTitle">음성 입력 방식</strong><span id="capabilitySummary">휴대폰 성능 확인 중</span></div>
+        <span id="recommendation" class="recommendation">권장 방식 확인 중</span>
+      </div>
+      <fieldset id="inputModes" class="mode-grid">
+        <legend class="sr-only">음성 입력 방식 선택</legend>
+        <label><input type="radio" name="inputMode" value="local-model"> <span><b>다운로드 모델</b><small>Whisper Small 고품질 · 음성은 휴대폰 안에서 처리</small></span></label>
+        <label><input type="radio" name="inputMode" value="browser"> <span><b>기존 브라우저 인식</b><small>Chrome 기기 내 음성팩 사용</small></span></label>
+        <label><input type="radio" name="inputMode" value="server"> <span><b>서버 인식</b><small>성능 부족 시 선택 · 매 세션 별도 동의</small></span></label>
+        <label><input type="radio" name="inputMode" value="text"> <span><b>텍스트 전용</b><small>마이크 없이 입력·번역·회의정리 유지</small></span></label>
+      </fieldset>
+
+      <section id="modelPanel" class="mode-detail">
+        <div><strong>휴대폰 모델팩</strong><span>약 600MB · Wi-Fi 권장</span></div>
+        <progress id="modelProgress" max="100" value="0">0%</progress>
+        <div class="detail-actions">
+          <button id="installModel" type="button">모델 다운로드</button>
+          <button id="removeModel" type="button" disabled>모델 삭제</button>
+        </div>
+        <p id="modelStatus">아직 모델을 불러오지 않았습니다.</p>
+      </section>
+
+      <label id="serverConsentRow" class="server-consent">
+        <input id="serverConsent" type="checkbox">
+        <span><b>이번 세션에 한해 서버 음성인식에 동의</b><small>말한 음성 조각이 인식을 위해 서버와 선택된 STT 제공자로 전송됩니다. VoiceFlow 회의 저장소에는 음성 원본을 저장하지 않으며, 제공자의 처리 정책이 적용됩니다. 동의는 다음 브라우저 세션에 자동 승계하지 않습니다.</small></span>
+      </label>
+    </section>
+
+    <section class="room-toolbar" aria-label="회의 제어">
+      <div class="language-row" aria-label="언어 설정">
+        <label><span>시작</span>
+          <select id="sourceLanguage">
+            <option value="ko-KR">한국어</option>
+            <option value="vi-VN">Tiếng Việt</option>
+            <option value="en-US">English</option>
+          </select>
+        </label>
+        <label><span>번역</span>
+          <select id="targetLanguage">
+            <option value="vi-VN">Tiếng Việt</option>
+            <option value="ko-KR">한국어</option>
+            <option value="en-US">English</option>
+          </select>
+        </label>
+      </div>
+      <section class="media-panel" aria-label="마이크 연결">
+        <div class="media-summary">
+          <span class="participant-count">참여 1명</span>
+          <p id="mediaStatus" data-state="idle">입력 방식을 먼저 선택하세요.</p>
+        </div>
+        <div class="media-actions">
+          <button id="startMicrophone" type="button" disabled>마이크 연결</button>
+          <button id="stopMicrophone" type="button" disabled>마이크 중지</button>
+          <button id="startSpeech" type="button" disabled>음성 원문 시작</button>
+          <button id="finishSpeech" type="button" disabled>말하기 완료</button>
+        </div>
+        <p id="speechStatus" class="speech-status" data-state="idle">텍스트 입력은 모든 환경에서 사용할 수 있습니다.</p>
+      </section>
+    </section>
+
+    <p id="status" class="status" role="status">회의 연결 확인 중</p>
+    <section class="conversation-shell" aria-label="대화 내용">
+      <div class="conversation-heading"><strong>원문·번역</strong><span>음성 방식과 무관하게 같은 회의에 저장됩니다.</span></div>
+      <section id="captions" class="captions" aria-label="원문과 번역"><p class="empty">말을 시작하거나 메시지를 입력하세요.</p></section>
+    </section>
+    <form id="composer" class="composer">
+      <label class="sr-only" for="captionText">원문 입력</label>
+      <textarea id="captionText" rows="2" placeholder="말하거나 메시지 입력" required></textarea>
+      <button id="sendCaption" type="submit">전송</button>
+    </form>
+  </main>
+  <script type="module" src="/v4/local-stt-test/app.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+name: Chat Layout v278
+on:
+  pull_request:
+    paths:
+      - 'public/live-chat.css'
+      - '.github/workflows/chat-layout-v278.yml'
+
+jobs:
+  validate-layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate chat-first responsive layout markers
+        run: |
+          grep -q '@media(min-width:901px)' public/live-chat.css
+          grep -q 'height:calc(100dvh - 154px)' public/live-chat.css
+          grep -q 'grid-template-rows:auto minmax(0,1fr) auto auto' public/live-chat.css
+          grep -q 'shell:has(.chat-live-shell) .bottom-nav' public/live-chat.css
+          grep -q '@media(min-width:601px) and (max-width:900px)' public/live-chat.css
+          grep -q '@media(max-width:600px)' public/live-chat.css
+          grep -q 'chat-live-shell:has(.video-preview-panel.show)' public/live-chat.css
+          echo 'CHAT_LAYOUT_V278 PASS'

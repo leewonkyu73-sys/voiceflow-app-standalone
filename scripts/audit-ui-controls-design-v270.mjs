@@ -1,0 +1,45 @@
+import fs from 'node:fs/promises';
+const read=p=>fs.readFile(new URL('../'+p,import.meta.url),'utf8');
+const [app,css,adminHtml,adminJs,adminUx,adminActions,tapHtml,tapJs,tapSettingsHtml,tapSettingsJs]=await Promise.all([
+  read('public/app.js'),read('public/style.css'),read('public/admin-integrations.html'),read('public/admin-integrations.js'),read('public/admin-integrations-ux.js'),read('public/admin-integrations-actions.js'),read('public/tap.html'),read('public/tap.js'),read('public/tap-settings.html'),read('public/tap-settings.js')
+]);
+let failed=0;const pass=(name,ok,detail='')=>{console.log(`${ok?'PASS':'FAIL'}  ${name}${detail?'  '+detail:''}`);if(!ok)failed++};
+const pair=(name,ui,re,src=app)=>pass(name,ui.test(src)&&re.test(src),`ui=${ui.test(src)} binding=${re.test(src)}`);
+pair('language selection',/data-lang=/,/\[data-lang\]|data\.lang|dataset\.lang/);
+pair('primary navigation',/data-nav=/,/\[data-nav\]|dataset\.nav/);
+pair('external navigation',/data-href=/,/\[data-href\]|dataset\.href/);
+pair('voice memo',/id="quickMemoStart"/,/#quickMemoStart[\s\S]{0,180}launchSoloSessionV264\('memo'\)/);
+pair('voice meeting',/id="quickAudioStart"/,/#quickAudioStart[\s\S]{0,180}launchSoloSessionV264\('audio'\)/);
+pair('video meeting',/id="quickVideoStart"/,/#quickVideoStart[\s\S]{0,180}launchSoloSessionV264\('video'\)/);
+pair('stop capture',/id="stopCapture"/,/#stopCapture[\s\S]{0,160}endMeeting/);
+pair('session chat',/id="sendSessionChat"/,/#sendSessionChat[\s\S]{0,180}sendSessionChatV264/);
+pair('session note',/id="saveSessionNote"/,/#saveSessionNote[\s\S]{0,180}saveSessionNoteV264/);
+pair('TapJoin copy',/id="copyTapJoin"/,/#copyTapJoin/);
+pair('login form',/id="loginForm"/,/#loginForm[\s\S]{0,220}(submit|addEventListener)/);
+pair('registration form',/id="joinForm"/,/#joinForm[\s\S]{0,220}(submit|addEventListener)/);
+pair('logout',/id="logout"/,/#logout[\s\S]{0,180}(onclick|addEventListener)/);
+pair('delete account',/id="deleteAccount"/,/#deleteAccount[\s\S]{0,180}(onclick|addEventListener)/);
+pair('approve result',/id="approveResult"/,/#approveResult[\s\S]{0,180}(onclick|addEventListener)/);
+pair('reject result',/id="rejectResult"/,/#rejectResult[\s\S]{0,180}(onclick|addEventListener)/);
+pair('open Drive',/id="openDrive"/,/#openDrive[\s\S]{0,180}(onclick|addEventListener)/);
+const adminAll=adminJs+adminUx+adminActions;
+for(const id of ['refresh','saveHub','openHub','testHub','compareHub','pushAllHub','pullAllHub','refreshCompare']) pass(`admin button #${id}`,new RegExp(`id="${id}"`).test(adminHtml)&&new RegExp(`#${id}|getElementById\\(['\"]${id}`).test(adminAll));
+pass('admin button #autoConfigure',/id="autoConfigure"/.test(adminHtml)&&/async function autoConfigure\(/.test(adminUx)&&/autoConfigure\)/.test(adminUx));
+pass('admin button #runCoreTests',/id="runCoreTests"/.test(adminHtml)&&/async function runCoreTests\(/.test(adminUx)&&/runCoreTests\)/.test(adminUx));
+pass('dynamic connector save/test bindings',/data-save/.test(adminJs)&&/data-test/.test(adminJs)&&/button\[data-save\],button\[data-test\]/.test(adminActions));
+pass('admin-only guard UI',/role==='admin'|role!==['"]admin/.test(app+adminActions));
+for(const [id,needle] of [['saveProfile','saveProfile'],['writeNfc','writeNfc'],['copyNfc','copyNfc']]) pass(`NFC settings #${id}`,new RegExp(`id="${id}"`).test(tapSettingsHtml)&&new RegExp(needle).test(tapSettingsJs));
+for(const [id,needle] of [['joinMeeting','joinMeeting'],['showCard','showCard'],['backMeeting','backMeeting'],['saveContact','saveContact']]) pass(`Tap card #${id}`,new RegExp(`id="${id}"`).test(tapHtml)&&new RegExp(needle).test(tapJs));
+pass('COREON design marker',/coreon-v270/.test(app));
+pass('mobile six-item nav',/bottom-nav\.cols-6/.test(css)&&/repeat\(6,minmax\(0,1fr\)\)/.test(css));
+pass('mobile safe area',/safe-area-inset-bottom/.test(css));
+pass('desktop left navigation',/@media\(min-width:1100px\)/.test(css)&&/width:220px/.test(css));
+pass('medium icon rail',/min-width:760px/.test(css)&&/width:76px/.test(css));
+pass('minimum touch target',/min-height:44px/.test(css));
+pass('localized nav labels',/navLabelV270/.test(app)&&/Trang chủ/.test(app)&&/Calendar/.test(app)&&/更多/.test(app));
+pass('compact radius token',/--s45-radius:14px/.test(css));
+pass('participant audio levels',/사람별 음성 입력/.test(app)&&/audio-level/.test(app));
+pass('organization signup',/joinOrgCode/.test(app)&&/joinCompany/.test(app));
+pass('admin settings hidden from members',/state\.user\?\.role===['"]admin/.test(app));
+if(failed){console.error(`UI / DESIGN AUDIT FAILED: ${failed}`);process.exit(1)}
+console.log('ALL UI CONTROLS + COREON DESIGN AUDIT PASS');

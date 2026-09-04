@@ -1,0 +1,82 @@
+name: Chat Correction v277
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/patch-live-chat-v269.mjs'
+      - 'scripts/patch-live-translation-routing-v272.mjs'
+      - 'public/live-chat.css'
+      - 'scripts/patch-voiceflow-planned-v314.mjs'
+      - 'public/voiceflow-planned-v14.css'
+      - '.github/workflows/chat-correction-v277.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/patch-live-chat-v269.mjs'
+      - 'scripts/patch-live-translation-routing-v272.mjs'
+      - 'public/live-chat.css'
+      - '.github/workflows/chat-correction-v277.yml'
+
+jobs:
+  focused-chat-e2e:
+    runs-on: [self-hosted, voiceflow, vps]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build final chat UI and verify controls
+        run: |
+          node scripts/patch-admin-drive-v262.mjs
+          node --check public/app.js
+          grep -q 'data-caption-delete' public/app.js
+          grep -q 'data-translation-wrong' public/app.js
+          grep -q 'id="liveTargetLang"' public/app.js
+          grep -q 'class="vf-chat-toolbar"' public/app.js
+          grep -q '음성인식 미지원' public/app.js
+          ! grep -q '<button id="openChromeStt"' public/app.js
+          ! grep -q '<button id="micCheck"' public/app.js
+          ! grep -q '<button id="openAiSelfTest"' public/app.js
+      - name: Patch backend correction APIs
+        run: |
+          node scripts/patch-live-translation-routing-v272.mjs
+          node --check server-v2.mjs
+          grep -q 'caption.translation_flagged' server-v2.mjs
+          grep -q 'caption_delete_forbidden' server-v2.mjs
+      - name: Run caption delete feedback and personal-language API test
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATA_DIR=$(mktemp -d)
+          DATA_DIR="$DATA_DIR" PORT=4199 node server-v2.mjs >/tmp/chat-v277.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:4199/api/health >/dev/null 2>&1; then READY=1; break; fi
+            sleep 0.5
+          done
+          if [ "$READY" != "1" ]; then
+            echo "focused server did not start"
+            ps -p "$PID" -o pid,stat,cmd || true
+            cat /tmp/chat-v277.log || true
+            exit 1
+          fi
+          MID=$(curl -fsS -X POST http://127.0.0.1:4199/api/v1/meetings -H 'content-type: application/json' --data '{"type":"internal","title":"chat-v277","peer_id":"peer_a","name":"A","language":"ko-KR"}' | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.parse(s).data.id))")
+          CAP=$(curl -fsS -X POST "http://127.0.0.1:4199/api/v1/meetings/$MID/captions" -H 'content-type: application/json' --data '{"peer_id":"peer_a","speaker":"A","language":"ko-KR","detected_language":"ko-KR","text":"잘못 입력한 문장","final":true}')
+          CID=$(printf '%s' "$CAP" | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.parse(s).data.id))")
+          CREATED_AT=$(printf '%s' "$CAP" | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(String(JSON.parse(s).data.created_at)))")
+          PATCHED=$(curl -fsS -X PATCH "http://127.0.0.1:4199/api/v1/meetings/$MID/captions/$CID" -H 'content-type: application/json' --data '{"peer_id":"peer_a","target":"vi-VN","text":"배송은 다음 주 월요일부터 시작하겠습니다."}')
+          printf '%s' "$PATCHED" | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const d=JSON.parse(s).data;if(d.text!=='배송은 다음 주 월요일부터 시작하겠습니다.'||d.pending_translation!==false||!d.translations?.['vi-VN']||d.translations['vi-VN']===d.text)process.exit(1)})"
+          curl -fsS "http://127.0.0.1:4199/api/v1/meetings/$MID/captions?target=vi-VN&since=$CREATED_AT" | CID="$CID" node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const d=JSON.parse(s).data;if(!d.some(x=>x.id===process.env.CID&&x.text==='배송은 다음 주 월요일부터 시작하겠습니다.'&&x.pending_translation===false))process.exit(1)})"
+          curl -fsS -X POST "http://127.0.0.1:4199/api/v1/meetings/$MID/captions/$CID/translation-feedback" -H 'content-type: application/json' --data '{"peer_id":"peer_a","target":"en-US","reason":"wrong_translation"}' | grep -q 'incorrect'
+          curl -fsS "http://127.0.0.1:4199/api/v1/meetings/$MID/captions?target=en-US" | grep -q 'translation_feedback'
+          curl -fsS "http://127.0.0.1:4199/api/v1/meetings/$MID/captions?target=vi-VN" | grep -q '"display_target_language":"vi-VN"'
+          curl -fsS "http://127.0.0.1:4199/api/v1/meetings/$MID/captions?target=en-US" | grep -q '"display_target_language":"en-US"'
+          curl -fsS -X DELETE "http://127.0.0.1:4199/api/v1/meetings/$MID/captions/$CID" -H 'content-type: application/json' --data '{"peer_id":"peer_a"}' | grep -q '"deleted":true'
+          if curl -fsS "http://127.0.0.1:4199/api/v1/meetings/$MID/captions?target=en-US" | grep -q "$CID"; then echo 'caption still exists'; exit 1; fi
+          echo 'CAPTION EDIT TRANSLATE RELOAD PASS'
+          echo 'CHAT DELETE PASS'
+          echo 'WRONG TRANSLATION FLAG PASS'
+          echo 'PERSONAL TARGET LANGUAGE PASS'

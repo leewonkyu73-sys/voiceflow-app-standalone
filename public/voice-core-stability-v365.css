@@ -1,0 +1,8 @@
+.vf-chat-toolbar{min-height:64px;align-items:center}
+.vf-audio-monitor-slot{display:flex!important;align-items:center;justify-content:flex-start;gap:7px;min-height:30px;margin:0 12px;padding:4px 10px;border:0!important;border-radius:0!important;background:transparent!important;color:#66758f;font-size:12px}
+.vf-audio-monitor-slot .vf-quality-bars{display:inline-flex!important}
+.vf-audio-monitor-slot[data-quality="good"]{color:#07865b}
+.vf-audio-monitor-slot[data-quality="quiet"],.vf-audio-monitor-slot[data-quality="noise"]{color:#b45309}
+.vf-audio-monitor-slot[data-quality="clip"],.vf-audio-monitor-slot[data-quality="denied"]{color:#dc2626}
+#speechState,#speechLatency{font-variant-numeric:tabular-nums}
+@media(max-width:650px),((hover:none) and (pointer:coarse)){.vf-chat-toolbar{min-height:58px}.vf-audio-monitor-slot{margin:0 8px;min-height:26px;font-size:11px}}

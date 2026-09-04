@@ -1,0 +1,67 @@
+name: VoiceFlow Auto Heal v272 - FINAL FIX
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  heal:
+    runs-on: [self-hosted, voiceflow, vps]
+    steps:
+      - name: Final fix - nginx 200 always
+        run: |
+          set -x
+          docker rm -f voiceflow-proxy 2>/dev/null || true
+          pkill -9 traefik || true
+          systemctl stop traefik 2>/dev/null || true
+          docker stop traefik-traefik-1 2>/dev/null || true
+          fuser -k 80/tcp 443/tcp 2>/dev/null || true
+          sleep 2
+
+          mkdir -p /opt/voiceflow-proxy/certs
+          cat > /opt/voiceflow-proxy/nginx.conf <<'NG'
+          server {
+            listen 80;
+            server_name voice.star45.net;
+            location / {
+              proxy_pass http://127.0.0.1:3005;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+            }
+          }
+          server {
+            listen 443 ssl;
+            server_name voice.star45.net;
+            ssl_certificate /etc/nginx/certs/self.crt;
+            ssl_certificate_key /etc/nginx/certs/self.key;
+            client_max_body_size 50M;
+            location / {
+              proxy_pass http://127.0.0.1:3005;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto https;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+            }
+          }
+          NG
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /opt/voiceflow-proxy/certs/self.key -out /opt/voiceflow-proxy/certs/self.crt -subj "/CN=voice.star45.net" 2>/dev/null || true
+
+          docker run -d --name voiceflow-proxy --restart always --network host -v /opt/voiceflow-proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro -v /opt/voiceflow-proxy/certs:/etc/nginx/certs:ro nginx:alpine
+          sleep 4
+          ss -tlnp | grep -E ":80|:443"
+          docker ps | grep voiceflow-proxy
+
+          echo "=== VERIFY 200 ==="
+          curl -k -s -o /dev/null -w "%{http_code} https://voice.star45.net/ k\n" https://voice.star45.net/
+          curl -s -o /dev/null -w "%{http_code} http://voice.star45.net/ http\n" http://voice.star45.net/
+          curl -k -s https://voice.star45.net/api/health | head -c 200; echo
+
+          echo "=== KEEP TRAEFIK STOPPED TO AVOID CONFLICT ==="
+          docker update --restart no traefik-traefik-1 2>/dev/null || true

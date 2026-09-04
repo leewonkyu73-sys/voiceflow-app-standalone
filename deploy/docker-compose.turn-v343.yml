@@ -1,0 +1,9 @@
+services:
+  voiceflow-turn:
+    image: coturn/coturn:4.17.0-r0
+    container_name: voiceflow-turn-v343
+    network_mode: host
+    command: ["-c","/etc/coturn/turnserver.conf"]
+    volumes:
+      - /opt/star45/voiceflow-turn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    restart: unless-stopped

@@ -1,0 +1,284 @@
+services:
+  voiceflow-core:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.v2
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-core-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","../server-v2.mjs"]
+    environment:
+      NODE_ENV: production
+      PORT: 4180
+      VOICEFLOW_V4_MOBILE_ENABLED: ${VOICEFLOW_V4_MOBILE_ENABLED:-0}
+      VOICEFLOW_V4_LOCAL_STT_ENABLED: ${VOICEFLOW_V4_LOCAL_STT_ENABLED:-0}
+      VOICEFLOW_SPEECH_QUALITY_LAB_ENABLED: ${VOICEFLOW_SPEECH_QUALITY_LAB_ENABLED:-0}
+      VOICEFLOW_SPEECH_QUALITY_API_ENABLED: ${VOICEFLOW_SPEECH_QUALITY_API_ENABLED:-0}
+      LOCAL_STT_ENABLED: ${LOCAL_STT_ENABLED:-0}
+      LOCAL_STT_EXCLUSIVE: '1'
+      LOCAL_STT_URL: ${LOCAL_STT_URL:-http://127.0.0.1:4186/inference}
+      LOCAL_STT_MODEL: ${LOCAL_STT_MODEL:-tiny}
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TEXT_MODEL: ${OPENAI_TEXT_MODEL:-gpt-5}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-3.7-flash}
+      DEEPL_API_KEY: ${DEEPL_API_KEY:-}
+      DEEPL_API_URL: ${DEEPL_API_URL:-}
+      INTEGRATION_HUB_RESOLVER_URL: ${INTEGRATION_HUB_RESOLVER_URL:-https://tozzxkpvpkqanhmxetpu.supabase.co/functions/v1/star45-worker-credential-resolver}
+      INTEGRATION_HUB_APP_TOKEN: ${INTEGRATION_HUB_APP_TOKEN:-}
+      INTEGRATION_HUB_TENANT_ID: ${INTEGRATION_HUB_TENANT_ID:-STAR45}
+      INTEGRATION_HUB_SCOPE_ID: ${INTEGRATION_HUB_SCOPE_ID:-meeting}
+      INTEGRATION_HUB_PROVIDERS: ${INTEGRATION_HUB_PROVIDERS:-openai,gemini,deepl}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+      - /opt/star45/voiceflow-runtime-public:/app/public:ro
+    restart: unless-stopped
+
+  voiceflow-local-stt:
+    profiles: ["local-stt"]
+    image: ghcr.io/ggml-org/whisper.cpp@sha256:479a53894c39c912bec0e06c010313602f070bfef6ac6ca26e143b61a54b2b3b
+    container_name: voiceflow-local-stt
+    network_mode: host
+    command:
+      - ./models/download-ggml-model.sh tiny /models && ./models/download-vad-model.sh silero-v6.2.0 /models && whisper-server --host 127.0.0.1 --port 4186 --model /models/ggml-tiny.bin --threads 2 --convert --vad-model /models/ggml-silero-v6.2.0.bin
+    volumes:
+      - /opt/star45/voiceflow-models:/models
+    restart: unless-stopped
+
+  voiceflow-board:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-board-v26
+    network_mode: host
+    command: ["node","services/board-service.mjs"]
+    environment:
+      NODE_ENV: production
+      BOARD_PORT: 4175
+      BOARD_DATA_DIR: /app/data
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core]
+
+  voiceflow-tasks:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-tasks-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","task-calendar-service.mjs"]
+    environment:
+      NODE_ENV: production
+      TASK_PORT: 4176
+      TASK_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      MS_CLIENT_ID: ${MS_CLIENT_ID:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_VOICE_CHANNEL_ID: ${DISCORD_VOICE_CHANNEL_ID:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-ai:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-ai-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","ai-employee-service.mjs"]
+    environment:
+      NODE_ENV: production
+      AI_EMPLOYEE_PORT: 4177
+      AI_EMPLOYEE_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TEXT_MODEL: ${OPENAI_TEXT_MODEL:-gpt-5-mini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_TEXT_MODEL: ${GEMINI_TEXT_MODEL:-gemini-2.5-flash}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_TEXT_MODEL: ${ANTHROPIC_TEXT_MODEL:-}
+      INTEGRATION_HUB_RESOLVER_URL: ${INTEGRATION_HUB_RESOLVER_URL:-https://tozzxkpvpkqanhmxetpu.supabase.co/functions/v1/star45-worker-credential-resolver}
+      INTEGRATION_HUB_APP_TOKEN: ${INTEGRATION_HUB_APP_TOKEN:-}
+      INTEGRATION_HUB_TENANT_ID: ${INTEGRATION_HUB_TENANT_ID:-STAR45}
+      INTEGRATION_HUB_SCOPE_ID: ${INTEGRATION_HUB_SCOPE_ID:-meeting}
+      INTEGRATION_HUB_PROVIDERS: ${INTEGRATION_HUB_PROVIDERS:-openai,gemini,deepl}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-connectors:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-connectors-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","hermes-obsidian-discord-service.mjs"]
+    environment:
+      NODE_ENV: production
+      CONNECTOR_PORT: 4178
+      CONNECTOR_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      OBSIDIAN_VAULT_PATH: ${OBSIDIAN_VAULT_PATH:-/vault}
+      HERMES_ENABLED: ${HERMES_ENABLED:-true}
+      HERMES_BRIDGE_DIR: ${HERMES_BRIDGE_DIR:-/hermes-bridge}
+      SKILL_DISTRIBUTION_ENABLED: ${SKILL_DISTRIBUTION_ENABLED:-false}
+      SKILL_SOURCE_ROOT: ${SKILL_SOURCE_ROOT:-/app/.codex/skills}
+      SKILL_REGISTRY_PATH: ${SKILL_REGISTRY_PATH:-/app/data/skill-registry.json}
+      SKILL_APPROVED_COMMIT_SHA: ${SKILL_APPROVED_COMMIT_SHA:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_NOTICE_CHANNEL_ID: ${DISCORD_NOTICE_CHANNEL_ID:-}
+      DISCORD_TASK_CHANNEL_ID: ${DISCORD_TASK_CHANNEL_ID:-}
+      DISCORD_VOICE_CHANNEL_ID: ${DISCORD_VOICE_CHANNEL_ID:-}
+      DISCORD_ACTIVITY_APP_ID: ${DISCORD_ACTIVITY_APP_ID:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+      - ${OBSIDIAN_HOST_PATH:-/opt/star45/obsidian-vault}:${OBSIDIAN_VAULT_PATH:-/vault}
+      - ${HERMES_HOST_BRIDGE_DIR:-/opt/star45/hermes-bridge}:${HERMES_BRIDGE_DIR:-/hermes-bridge}
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-meeting-results:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-meeting-results-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","meeting-result-drive-service.mjs"]
+    environment:
+      NODE_ENV: production
+      MEETING_RESULT_PORT: 4179
+      MEETING_RESULT_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      MEETING_PUBLIC_BASE_URL: ${MEETING_PUBLIC_BASE_URL:-https://voice.star45.net}
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID:-}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      GOOGLE_DRIVE_REDIRECT_URI: ${GOOGLE_DRIVE_REDIRECT_URI:-}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${GOOGLE_DRIVE_REFRESH_TOKEN:-}
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID:-}
+      MEETING_DRIVE_TENANT_NAME: ${MEETING_DRIVE_TENANT_NAME:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-original-media:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-original-media-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","original-media-storage-service.mjs"]
+    environment:
+      NODE_ENV: production
+      ORIGINAL_MEDIA_PORT: 4184
+      ORIGINAL_MEDIA_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID:-}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${GOOGLE_DRIVE_REFRESH_TOKEN:-}
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-admin-integrations:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-admin-integrations-v26
+    network_mode: host
+    command: ["node","services/admin-integration-service.mjs"]
+    environment:
+      NODE_ENV: production
+      ADMIN_INTEGRATION_PORT: 4181
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+      - ${OBSIDIAN_HOST_PATH:-/opt/star45/obsidian-vault}:${OBSIDIAN_VAULT_PATH:-/vault}
+      - ${HERMES_HOST_BRIDGE_DIR:-/opt/star45/hermes-bridge}:${HERMES_BRIDGE_DIR:-/hermes-bridge}
+    restart: unless-stopped
+    depends_on: [voiceflow-core]
+
+  voiceflow-integration-hub-bridge:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-integration-hub-bridge-v26
+    network_mode: host
+    command: ["node","services/integration-hub-bridge-service.mjs"]
+    environment:
+      NODE_ENV: production
+      INTEGRATION_HUB_BRIDGE_PORT: 4182
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations]
+
+  voiceflow-device-nearby:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-device-nearby-v26
+    network_mode: host
+    command: ["node","services/device-nearby-tapjoin-service.mjs"]
+    environment:
+      NODE_ENV: production
+      DEVICE_NEARBY_PORT: 4183
+      DEVICE_NEARBY_DATA_DIR: /app/data
+      MEETING_PUBLIC_BASE_URL: ${MEETING_PUBLIC_BASE_URL:-https://voice.star45.net}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+    restart: unless-stopped
+    depends_on: [voiceflow-core]
+
+  voiceflow-automation:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-automation-v26
+    network_mode: host
+    command: ["node","services/integration-env-launcher.mjs","automation-worker.mjs"]
+    environment:
+      NODE_ENV: production
+      AUTOMATION_DATA_DIR: /app/data
+      INTEGRATION_DATA_DIR: /app/data
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
+      GOOGLE_DRIVE_TOKEN_SECRET: ${GOOGLE_DRIVE_TOKEN_SECRET:-}
+      AUTOMATION_POLL_MS: ${AUTOMATION_POLL_MS:-10000}
+      OBSIDIAN_VAULT_PATH: ${OBSIDIAN_VAULT_PATH:-/vault}
+      HERMES_BRIDGE_DIR: ${HERMES_BRIDGE_DIR:-/hermes-bridge}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_NOTICE_CHANNEL_ID: ${DISCORD_NOTICE_CHANNEL_ID:-}
+      DISCORD_VOICE_CHANNEL_ID: ${DISCORD_VOICE_CHANNEL_ID:-}
+    volumes:
+      - /opt/star45/voiceflow-data:/app/data
+      - ${OBSIDIAN_HOST_PATH:-/opt/star45/obsidian-vault}:${OBSIDIAN_VAULT_PATH:-/vault}
+      - ${HERMES_HOST_BRIDGE_DIR:-/opt/star45/hermes-bridge}:${HERMES_BRIDGE_DIR:-/hermes-bridge}
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-admin-integrations,voiceflow-connectors,voiceflow-tasks,voiceflow-meeting-results]
+
+  voiceflow-gateway:
+    image: voiceflow-smart-workspace:v2.6
+    container_name: voiceflow-gateway-v26
+    network_mode: host
+    command: ["node","deploy/gateway.mjs"]
+    environment:
+      NODE_ENV: production
+      GATEWAY_PORT: 4173
+      CORE_PORT: 4180
+      BOARD_PORT: 4175
+      TASK_PORT: 4176
+      AI_EMPLOYEE_PORT: 4177
+      CONNECTOR_PORT: 4178
+      MEETING_RESULT_PORT: 4179
+      ADMIN_INTEGRATION_PORT: 4181
+      INTEGRATION_HUB_BRIDGE_PORT: 4182
+      DEVICE_NEARBY_PORT: 4183
+      ORIGINAL_MEDIA_PORT: 4184
+    restart: unless-stopped
+    depends_on: [voiceflow-core,voiceflow-board,voiceflow-tasks,voiceflow-ai,voiceflow-connectors,voiceflow-meeting-results,voiceflow-original-media,voiceflow-admin-integrations,voiceflow-integration-hub-bridge,voiceflow-device-nearby,voiceflow-automation]

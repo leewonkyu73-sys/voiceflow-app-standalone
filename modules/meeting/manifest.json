@@ -1,0 +1,129 @@
+{
+  "schema_version": "1.1",
+  "module_id": "03-MEETING-CORE-01",
+  "name": "STAR45 AI Meeting Core",
+  "version": "3.0.0-alpha",
+  "product_role": "meeting-first-core",
+  "deployable": true,
+  "embeddable": true,
+  "standalone": true,
+  "multi_tenant": true,
+  "frontends": [
+    "FE-Meeting",
+    "FE-Meeting-Result",
+    "FE-Meeting-Admin"
+  ],
+  "backends": [
+    "BE-Meeting"
+  ],
+  "features": [
+    "F-STT",
+    "F-Translation",
+    "F-Translation-Assurance",
+    "F-Meeting-Result",
+    "F-AI-Participant",
+    "F-Task-Proposal"
+  ],
+  "optional_connectors": [
+    "C-TotalERP",
+    "C-Calendar",
+    "C-GoogleDrive",
+    "C-Obsidian",
+    "C-Hermes",
+    "C-Discord",
+    "C-GoogleWorkspace",
+    "C-Microsoft365"
+  ],
+  "public_routes": [
+    "/api/v1/meetings",
+    "/api/v1/meetings/:id/join",
+    "/api/v1/meetings/:id/captions",
+    "/api/v1/meetings/:id/signals",
+    "/api/v1/meetings/:id/finalize",
+    "/api/v1/meetings/:id/result"
+  ],
+  "events_out": [
+    "meeting.created",
+    "meeting.preflight.completed",
+    "meeting.joined",
+    "meeting.recording.started",
+    "meeting.recording.stopped",
+    "meeting.caption.final",
+    "meeting.ai.opinion",
+    "meeting.finalized",
+    "meeting.result.reviewed",
+    "meeting.result.approved",
+    "meeting.result.rejected",
+    "meeting.result.drive.persist.requested",
+    "meeting.result.drive.persisted",
+    "meeting.task.proposed",
+    "meeting.task.approved",
+    "meeting.knowledge.export.requested",
+    "meeting.communication.requested"
+  ],
+  "events_in": [
+    "calendar.event.updated",
+    "task.updated",
+    "ai.employee.updated",
+    "connector.status.changed"
+  ],
+  "data_ownership": {
+    "owns": [
+      "meetings",
+      "captions",
+      "meeting_consents",
+      "meeting_result_metadata"
+    ],
+    "references": [
+      "users",
+      "tenants",
+      "organizations",
+      "departments",
+      "tasks",
+      "calendar_events",
+      "files"
+    ],
+    "external_source_of_truth": {
+      "meeting_result_files": "google-drive"
+    }
+  },
+  "meeting_result_storage": {
+    "provider": "google-drive",
+    "source_of_truth": true,
+    "store_in_app_db": "metadata-only",
+    "metadata_fields": [
+      "meeting_id",
+      "drive_file_id",
+      "drive_folder_id",
+      "drive_url",
+      "mime_type",
+      "version",
+      "checksum",
+      "created_at",
+      "updated_at"
+    ],
+    "recommended_artifacts": [
+      "meeting-summary",
+      "decisions",
+      "action-items",
+      "risk-notes",
+      "approved-report",
+      "attachments-index"
+    ]
+  },
+  "policies": {
+    "recording_on_join": false,
+    "device_preflight": true,
+    "video_consent_required": true,
+    "task_creation_requires_approval": true,
+    "knowledge_export_requires_approval": true,
+    "meeting_result_primary_storage": "google-drive",
+    "secrets_in_client": false
+  },
+  "integration_modes": [
+    "standalone",
+    "total-erp-module",
+    "embedded-sdk",
+    "white-label"
+  ]
+}

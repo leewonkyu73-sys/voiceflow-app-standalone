@@ -1,0 +1,38 @@
+/* VoiceFlow latest-message anchor and measured speech latency v3.5.2 */
+.vf-speech-latency{
+  display:inline-flex!important;
+  align-items:center;
+  min-height:22px;
+  padding:0 7px;
+  border:1px solid #bbd5fb;
+  border-radius:999px;
+  background:#eef6ff;
+  color:#135fbd!important;
+  font-size:11px!important;
+  font-weight:800;
+  font-variant-numeric:tabular-nums;
+}
+
+.vf-transcript{
+  scroll-behavior:auto!important;
+  scroll-padding-top:8px!important;
+}
+
+/* Keep enough trailing room for the newest completed message to sit at the top. */
+.vf-transcript::after{
+  content:"";
+  display:block;
+  height:clamp(260px,calc(100dvh - 320px),620px);
+  pointer-events:none;
+}
+
+@media(max-width:760px){
+  .vf-toolbar-recording #speechState{display:none!important}
+  .vf-toolbar-recording .vf-speech-latency{
+    display:inline-flex!important;
+    min-height:18px;
+    padding:0 5px;
+    font-size:9px!important;
+  }
+  .vf-transcript::after{height:clamp(240px,calc(100dvh - 300px),560px)}
+}
