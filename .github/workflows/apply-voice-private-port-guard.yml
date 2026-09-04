@@ -1,0 +1,121 @@
+name: Close public Voice internal ports and verify isolation
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/apply-voice-private-port-guard.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-private-port-isolation
+  cancel-in-progress: false
+
+jobs:
+  isolate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply persistent loopback-only port guard
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script_stop: false
+          script: |
+            set -e
+            RUN_ID='${{ github.run_id }}'
+            SCRIPT="/tmp/install-voice-private-port-guard-$RUN_ID.sh"
+            curl -fsSL --retry 3 --retry-delay 1 \
+              https://raw.githubusercontent.com/leewonkyu73-sys/voiceflow-app-standalone/95c70c8b747681c7085367687171c45d8c553c2e/ops/install-voice-private-port-guard.sh \
+              -o "$SCRIPT"
+            chmod 700 "$SCRIPT"
+            RUN_ID="$RUN_ID" sh "$SCRIPT" apply
+
+      - name: Verify direct ports are closed from independent network
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.run_id }}'
+          for port in 3005 3006; do
+            body="/tmp/direct-$port-$RUN_ID"
+            code=$(curl -sS --connect-timeout 5 --max-time 8 -o "$body" -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            size=$(wc -c < "$body" 2>/dev/null || echo 0)
+            rm -f "$body"
+            echo "DIRECT_PORT=$port CODE=$code SIZE=$size"
+            test "$code" = 000
+          done
+
+          INDEX="/tmp/voice-index-$RUN_ID"
+          APP="/tmp/voice-app-$RUN_ID"
+          trap 'rm -f "$INDEX" "$APP"' EXIT
+          ROOT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "https://voice.star45.net/?ts=$RUN_ID")
+          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "https://voice.star45.net/app.js?ts=$RUN_ID")
+          HEALTH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/api/health)
+          APP_HASH=$(sha256sum "$APP" | awk '{print $1}')
+          test "$ROOT_CODE" = 200
+          test "$APP_CODE" = 200
+          test "$HEALTH_CODE" = 200
+          test "$APP_HASH" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
+          grep -qF 'app.js?v=3.5.24' "$INDEX"
+          grep -qF 'liveComposer' "$APP"
+          grep -qF 'data-translation-input' "$APP"
+
+          echo 'DIRECT_PORT_3005=BLOCKED'
+          echo 'DIRECT_PORT_3006=BLOCKED'
+          echo "VOICE_ROOT=PASS CODE=$ROOT_CODE"
+          echo "VOICE_APP=PASS CODE=$APP_CODE HASH=$APP_HASH"
+          echo "VOICE_API_HEALTH=PASS CODE=$HEALTH_CODE"
+          echo 'EXTERNAL_PORT_ISOLATION=PASS'
+
+      - name: Confirm persistent guard and loopback health
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script_stop: false
+          script: |
+            set -e
+            test "$(systemctl is-enabled star45-voice-private-port-guard.service)" = enabled
+            test "$(systemctl is-active star45-voice-private-port-guard.service)" = active
+            for bin in iptables ip6tables; do
+              for port in 3005 3006; do
+                "$bin" -C INPUT ! -i lo -p tcp --dport "$port" -m comment --comment "STAR45-voice-private-$port" -j REJECT
+              done
+            done
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
+            test "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            nginx -t
+            echo 'PERSISTENT_GUARD=PASS'
+            echo 'LOOPBACK_HEALTH=PASS'
+            echo 'NGINX_CONFIG=PASS'
+
+      - name: Roll back port guard if any verification fails
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script_stop: false
+          script: |
+            RUN_ID='${{ github.run_id }}'
+            SCRIPT="/tmp/install-voice-private-port-guard-$RUN_ID.sh"
+            if [ ! -r "$SCRIPT" ]; then
+              curl -fsSL --retry 3 --retry-delay 1 \
+                https://raw.githubusercontent.com/leewonkyu73-sys/voiceflow-app-standalone/95c70c8b747681c7085367687171c45d8c553c2e/ops/install-voice-private-port-guard.sh \
+                -o "$SCRIPT"
+              chmod 700 "$SCRIPT"
+            fi
+            RUN_ID="$RUN_ID" sh "$SCRIPT" rollback
