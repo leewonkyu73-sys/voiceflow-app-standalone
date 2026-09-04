@@ -1,4 +1,4 @@
-name: Diagnose Voice translation and mobile STT read-only
+name: Restore local Whisper sidecar through VPS SSH
 
 on:
   push:
@@ -10,135 +10,30 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: voice-local-whisper-production
+  cancel-in-progress: false
+
 jobs:
-  diagnose:
+  restore:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - name: Inspect production Voice functional stack without changes
+      - name: Execute guarded sidecar restoration on VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 5m
-          script_stop: false
+          command_timeout: 20m
+          script_stop: true
           script: |
-            echo '=== TIME_AND_CAPACITY ==='
-            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
-            uptime
-            free -m
-            df -h /
-
-            echo '=== CURRENT_PUBLIC_API ==='
-            curl -sS --max-time 10 https://voice.star45.net/api/health || true
-            echo
-            curl -sS --max-time 10 https://voice.star45.net/api/v1/admin/settings || true
-            echo
-            for path in /api/v1/admin/diagnostics /api/v1/speech-quality/providers; do
-              code=$(curl -sS --max-time 10 -o /tmp/voice-api-probe -w '%{http_code}' "https://voice.star45.net$path" || true)
-              body=$(head -c 500 /tmp/voice-api-probe 2>/dev/null | tr '\n' ' ' || true)
-              echo "PATH=$path CODE=$code BODY=$body"
-              rm -f /tmp/voice-api-probe
-            done
-
-            echo '=== ACTIVE_PROCESS_AND_ROUTE ==='
-            pm2 list || true
-            pm2 describe voice 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
-            ss -ltnp | grep -E ':(3005|3006|4173|4175|4176|4177|4178|4179|4180|4181|4182|4183|4184|4186)([[:space:]]|$)' || true
-            sed -n '1,180p' /etc/nginx/sites-enabled/voice.star45.net 2>/dev/null || true
-
-            echo '=== BACKEND_CAPABILITY_COMPARE ==='
-            for f in /opt/star45/voiceflow-smart-workspace/server.mjs /opt/star45/voiceflow-smart-workspace/server-v2.mjs; do
-              if [ -f "$f" ]; then
-                echo "FILE=$f BYTES=$(wc -c < "$f") SHA=$(sha256sum "$f" | awk '{print $1}')"
-                for marker in 'transcribeExternal' '/transcribe$' 'pending_translation' 'translateExternal' 'STT_MEETING_REQUEST_LIMIT' 'VOICEFLOW_STT_MAX_CONCURRENCY' 'translation_unchanged'; do
-                  count=$(grep -Foc "$marker" "$f" 2>/dev/null || true)
-                  echo "MARKER=$marker COUNT=$count"
-                done
-              fi
-            done
-
-            echo '=== CANONICAL_UI_EXPECTATIONS ==='
-            for f in /opt/star45/voiceflow-runtime-public/app.js /opt/star45/voiceflow-runtime-public/index.html /opt/star45/voiceflow-runtime-public/sw.js; do
-              if [ -f "$f" ]; then
-                echo "FILE=$f BYTES=$(wc -c < "$f") SHA=$(sha256sum "$f" | awk '{print $1}')"
-              fi
-            done
-            APP=/opt/star45/voiceflow-runtime-public/app.js
-            if [ -f "$APP" ]; then
-              for marker in '/transcribe' "'x-voice-client':'v4-mobile'" 'pending_translation' 'display_target_language' 'data-translation-input' 'startServerSpeechFallback' 'SERVER_STT_REQUEST_TIMEOUT_MS' 'postCaption'; do
-                count=$(grep -Foc "$marker" "$APP" 2>/dev/null || true)
-                echo "APP_MARKER=$marker COUNT=$count"
-              done
-              grep -nF '/transcribe' "$APP" | head -8 || true
-              grep -nF 'pending_translation' "$APP" | head -8 || true
-            fi
-
-            echo '=== FULL_STACK_IMAGES_AND_CONTAINERS ==='
-            docker images --format 'IMAGE={{.Repository}}:{{.Tag}} ID={{.ID}} CREATED={{.CreatedSince}} SIZE={{.Size}}' | grep -E 'voiceflow|whisper|IMAGE=' || true
-            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}} PORTS={{.Ports}}' | grep -E 'voiceflow|NAME=' || true
-            docker compose version 2>/dev/null || true
-            test -f /opt/star45/voiceflow-smart-workspace/deploy/docker-compose.v23.yml && echo 'COMPOSE_FILE=FOUND' || echo 'COMPOSE_FILE=MISSING'
-
-            echo '=== PROVIDER_AND_STT_CONFIGURATION ==='
-            ENV=/opt/star45/voiceflow-smart-workspace/.env
-            if [ -f "$ENV" ]; then
-              for key in INTEGRATION_SECRET_KEY OPENAI_API_KEY GEMINI_API_KEY DEEPL_API_KEY INTEGRATION_HUB_APP_TOKEN; do
-                value=$(sed -n "s/^$key=//p" "$ENV" | tail -1)
-                if [ -n "$value" ]; then echo "$key=SET"; else echo "$key=EMPTY"; fi
-              done
-              for key in LOCAL_STT_ENABLED LOCAL_STT_EXCLUSIVE LOCAL_STT_URL LOCAL_STT_MODEL VOICEFLOW_V4_MOBILE_ENABLED; do
-                value=$(sed -n "s/^$key=//p" "$ENV" | tail -1)
-                echo "$key=${value:-UNSET}"
-              done
-            else
-              echo 'ENV_FILE=MISSING'
-            fi
-            for f in /opt/star45/voiceflow-data/settings.json /opt/star45/voiceflow-smart-workspace/data/settings.json; do
-              if [ -f "$f" ]; then
-                echo "SETTINGS_FILE=$f"
-                node -e "const fs=require('fs');const f=process.argv[1];try{const d=JSON.parse(fs.readFileSync(f,'utf8'));console.log(JSON.stringify({providers:d.providers||{},fallback:d.fallback||{},translation:d.translation||{}},null,2))}catch(e){console.log('SETTINGS_PARSE_ERROR='+e.message)}" "$f"
-              fi
-            done
-            find /opt/star45/voiceflow-data -maxdepth 2 -type f -printf '%p %s bytes\n' 2>/dev/null | grep -E 'integration|secret|provider|settings|usage' | head -80 || true
-            find /opt/star45/voiceflow-models -maxdepth 2 -type f -printf '%f %s bytes\n' 2>/dev/null | head -40 || true
-
-            echo '=== INTERNAL_SERVICE_PROBES ==='
-            for port in 4173 4175 4176 4177 4178 4179 4180 4181 4182 4183 4184 4186; do
-              rm -f /tmp/voice-port-probe
-              code=$(curl -sS --max-time 3 -o /tmp/voice-port-probe -w '%{http_code}' "http://127.0.0.1:$port/health" || true)
-              if [ "$code" = 000 ] || [ -z "$code" ]; then
-                code=$(curl -sS --max-time 3 -o /tmp/voice-port-probe -w '%{http_code}' "http://127.0.0.1:$port/api/health" || true)
-              fi
-              body=$(head -c 300 /tmp/voice-port-probe 2>/dev/null | tr '\n' ' ' || true)
-              echo "PORT=$port CODE=${code:-000} BODY=$body"
-              rm -f /tmp/voice-port-probe
-            done
-
-            echo '=== CURRENT_ENDPOINT_CONTRACTS ==='
-            code=$(curl -sS --max-time 8 -X POST -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' --data-binary 'tiny' -o /tmp/current-transcribe -w '%{http_code}' https://voice.star45.net/api/v1/meetings/mtg_contract_probe/transcribe || true)
-            echo "CURRENT_TRANSCRIBE_CODE=$code BODY=$(head -c 500 /tmp/current-transcribe 2>/dev/null | tr '\n' ' ' || true)"
-            rm -f /tmp/current-transcribe
-
-            echo '=== RECENT_RELEVANT_ERRORS ==='
-            for f in /root/.pm2/logs/voice-error.log /root/.pm2/logs/voice-out.log /var/log/nginx/error.log; do
-              if [ -f "$f" ]; then
-                echo "LOG=$f"
-                tail -n 250 "$f" | grep -Ei 'translat|transcrib|stt|provider|upstream|404|502|EADDR|ECONN|error' | tail -80 || true
-              fi
-            done
-            echo '=== DIAGNOSTIC_COMPLETE ==='
-
-      - name: Verify externally visible contract without writes
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "ROOT=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/)"
-          echo "HEALTH=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' https://voice.star45.net/api/health)"
-          echo "HEALTH_BODY=$(cat /tmp/health)"
-          echo "APP=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/app -w '%{http_code}' https://voice.star45.net/app.js)"
-          grep -qF '/transcribe' /tmp/app
-          grep -qF "'x-voice-client':'v4-mobile'" /tmp/app
-          rm -f /tmp/health /tmp/app
-          echo 'EXTERNAL_UI_EXPECTS_FULL_STT=PASS'
+            set -euo pipefail
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            SCRIPT=/tmp/restore-local-whisper-${{ github.run_id }}.sh
+            trap 'rm -f "$SCRIPT"' EXIT
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin d2426754c7514a1afcbf8fb00937816c434c4bdf
+            git -C "$ROOT" -c safe.directory="$ROOT" show d2426754c7514a1afcbf8fb00937816c434c4bdf:ops/restore-local-whisper-sidecar.sh > "$SCRIPT"
+            chmod 700 "$SCRIPT"
+            RUN_KEY=${{ github.run_id }} bash "$SCRIPT"
