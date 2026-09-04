@@ -1,0 +1,52 @@
+name: Verify Voice PWA retires obsolete screen
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/verify-voice-pwa-cache.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check current service worker update policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.run_id }}'
+          SW="/tmp/voice-sw-$RUN_ID.js"
+          INDEX="/tmp/voice-index-$RUN_ID.html"
+          APP="/tmp/voice-app-$RUN_ID.js"
+          trap 'rm -f "$SW" "$INDEX" "$APP"' EXIT
+
+          SW_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$SW" -w '%{http_code}' "https://voice.star45.net/sw.js?ts=$RUN_ID")
+          INDEX_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "https://voice.star45.net/?ts=$RUN_ID")
+          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "https://voice.star45.net/app.js?ts=$RUN_ID")
+
+          SW_HASH=$(sha256sum "$SW" | awk '{print $1}')
+          APP_HASH=$(sha256sum "$APP" | awk '{print $1}')
+          test "$SW_CODE" = 200
+          test "$INDEX_CODE" = 200
+          test "$APP_CODE" = 200
+          test "$SW_HASH" = f0baeb85438c2fd0890ec737f596f8bc29556b57c240ffaa338f88b67ddc508d
+          test "$APP_HASH" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
+          grep -qF 'self.skipWaiting()' "$SW"
+          grep -qF 'self.clients.claim()' "$SW"
+          grep -qF 'caches.keys()' "$SW"
+          grep -qF "e.request.mode==='navigate'" "$SW"
+          grep -qF 'fetch(e.request).then' "$SW"
+          grep -qF 'app.js?v=3.5.24' "$INDEX"
+          ! grep -qF 'app.js?v=3.5.8?v=3.5.23' "$INDEX"
+          grep -qF 'liveComposer' "$APP"
+          grep -qF 'data-translation-input' "$APP"
+
+          echo "PWA_SW=PASS CODE=$SW_CODE HASH=$SW_HASH"
+          echo 'PWA_INSTALL_ACTIVATE=PASS SKIP_WAITING=YES CLIENTS_CLAIM=YES OLD_CACHE_DELETE=YES'
+          echo 'PWA_NAVIGATION_POLICY=PASS NETWORK_FIRST=YES'
+          echo "PWA_CANONICAL_APP=PASS CODE=$APP_CODE HASH=$APP_HASH"
+          echo 'PWA_RETIRED_SCREEN_REENTRY=BLOCKED'
