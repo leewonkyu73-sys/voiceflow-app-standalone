@@ -1,4 +1,4 @@
-name: Diagnose voice.star45.net external read-only
+name: Diagnose Voice UI canonical versus fallback
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect production runtime without changes
+      - name: Inspect UI runtimes without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
@@ -22,54 +22,93 @@ jobs:
           command_timeout: 5m
           script_stop: false
           script: |
-            echo "=== TIME_AND_CAPACITY ==="
+            echo "=== TIME_CAPACITY ==="
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
             uptime
             free -m
             df -h /
 
-            echo "=== DNS ==="
-            grep -nE 'voice\.star45\.net|star45\.net' /etc/hosts || echo "NO_HOSTS_OVERRIDE"
-            getent ahostsv4 voice.star45.net || true
-            if command -v dig >/dev/null 2>&1; then
-              echo "CLOUDFLARE_A=$(dig +time=5 +tries=1 +short A voice.star45.net @1.1.1.1 | paste -sd, -)"
-              echo "GOOGLE_A=$(dig +time=5 +tries=1 +short A voice.star45.net @8.8.8.8 | paste -sd, -)"
-            fi
-
-            echo "=== RUNTIME_AND_ROUTE ==="
+            echo "=== ACTIVE_EDGE ==="
             pm2 list || true
-            ss -ltnp | grep -E ':(80|443|3005|3006)([[:space:]]|$)' || true
+            pm2 describe voice 2>/dev/null | grep -E 'status|script path|exec cwd|interpreter|restarts|uptime' || true
+            ss -ltnp | grep -E ':(80|443|3005|3006|4173|4174|4175|4176|4180|4181)([[:space:]]|$)' || true
             nginx -t 2>&1 || true
-            grep -RInE 'server_name[^;]*voice\.star45\.net|proxy_pass[[:space:]]+http://127\.0\.0\.1:(3005|3006)' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
+            sed -n '1,120p' /etc/nginx/sites-enabled/voice.star45.net 2>/dev/null || true
 
-            echo "=== SERVER_SIDE_HTTPS ==="
-            for n in 1 2 3; do
-              curl -sS --max-time 12 -o /tmp/voice-public -w "TRY=$n CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL=%{ssl_verify_result}\n" https://voice.star45.net/ || true
-              sleep 1
+            echo "=== DOCKER_STATUS ==="
+            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} PORTS={{.Ports}} IMAGE={{.Image}}' | grep -E 'voiceflow|NAME=' || true
+            for c in voiceflow-core-v26 voiceflow-public-edge-v262 voiceflow-ai-v26 voiceflow-admin-integrations-v26; do
+              if docker inspect "$c" >/dev/null 2>&1; then
+                echo "CONTAINER=$c STATE=$(docker inspect --format '{{.State.Status}}' "$c") RESTARTS=$(docker inspect --format '{{.RestartCount}}' "$c")"
+                docker inspect --format '{{range .Mounts}}MOUNT={{.Source}} -> {{.Destination}} RW={{.RW}}{{println}}{{end}}' "$c" 2>/dev/null || true
+              else
+                echo "CONTAINER=$c MISSING"
+              fi
             done
-            rm -f /tmp/voice-public
 
-            echo "=== RECENT_ERRORS ==="
-            tail -n 120 /var/log/nginx/error.log 2>/dev/null | grep -E 'voice\.star45\.net|3005|upstream|connect\(\) failed|timed out' | tail -n 40 || true
-            tail -n 120 /root/.pm2/logs/voice-error.log 2>/dev/null | grep -E 'EADDRINUSE|ECONN|Error|error|listen' | tail -n 40 || true
-            echo "=== SERVER_DIAGNOSTIC_COMPLETE ==="
+            echo "=== WORKSPACE_STATE ==="
+            for d in /opt/star45/voiceflow-smart-workspace /opt/star45/voiceflow-runtime-public /opt/star45/voiceflow-app-standalone /opt/star45/do-app; do
+              if [ -e "$d" ]; then
+                echo "PATH=$d"
+                if [ -d "$d/.git" ]; then
+                  (cd "$d" && echo "HEAD=$(git rev-parse HEAD 2>/dev/null || true)" && echo "BRANCH=$(git branch --show-current 2>/dev/null || true)" && git status --short | head -40) || true
+                fi
+                for f in public/index.html public/app.js public/sw.js index.html app.js sw.js; do
+                  [ -f "$d/$f" ] && sha256sum "$d/$f"
+                done
+              fi
+            done
 
-      - name: Verify HTTPS independently from GitHub runner
+            echo "=== UI_MARKERS_BY_ARTIFACT ==="
+            for f in /opt/star45/voiceflow-smart-workspace/public/app.js /opt/star45/voiceflow-runtime-public/app.js /opt/star45/voiceflow-app-standalone/public/app.js /opt/star45/do-app/public/app.js; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f BYTES=$(wc -c < "$f")"
+                for marker in 'liveComposer' 'mobileFourControls' '/v4/mobile' 'v4/mobile' 'model download' '모델 다운로드' 'data-translation-input' 'bottom-nav' '회의 시작' '의장 모드' '상담 모드'; do
+                  count=$(grep -Foc "$marker" "$f" 2>/dev/null || true)
+                  echo "MARKER=$marker COUNT=$count"
+                done
+              fi
+            done
+
+            echo "=== INDEX_MARKERS ==="
+            for f in /opt/star45/voiceflow-smart-workspace/public/index.html /opt/star45/voiceflow-runtime-public/index.html /opt/star45/voiceflow-app-standalone/public/index.html /opt/star45/do-app/public/index.html; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f"
+                grep -oE 'app\.js[^"< ]*|frontend-v4[^"< ]*|voiceflow[^"< ]*\.js[^"< ]*' "$f" | tail -20 || true
+              fi
+            done
+
+            echo "=== ENDPOINT_COMPARISON ==="
+            for url in http://127.0.0.1:3005/ http://127.0.0.1:3005/v4/mobile http://127.0.0.1:3006/ http://127.0.0.1:4180/ http://127.0.0.1:4180/v4/mobile; do
+              safe=$(printf '%s' "$url" | tr '/:' '__')
+              code=$(curl -sS --max-time 8 -o "/tmp/$safe" -w '%{http_code}' "$url" || true)
+              bytes=$(wc -c < "/tmp/$safe" 2>/dev/null || echo 0)
+              title=$(grep -o '<title>[^<]*' "/tmp/$safe" 2>/dev/null | head -1 | sed 's/<title>//' || true)
+              echo "URL=$url CODE=$code BYTES=$bytes TITLE=$title"
+              rm -f "/tmp/$safe"
+            done
+            for path in / /v4/mobile /app.js /api/health; do
+              safe=$(printf '%s' "$path" | tr '/' '_')
+              code=$(curl -sS --max-time 10 -H 'Cache-Control: no-cache' -o "/tmp/public$safe" -w '%{http_code}' "https://voice.star45.net$path?ts=$(date +%s)" || true)
+              bytes=$(wc -c < "/tmp/public$safe" 2>/dev/null || echo 0)
+              title=$(grep -o '<title>[^<]*' "/tmp/public$safe" 2>/dev/null | head -1 | sed 's/<title>//' || true)
+              echo "PUBLIC_PATH=$path CODE=$code BYTES=$bytes TITLE=$title"
+              rm -f "/tmp/public$safe"
+            done
+
+            echo "=== BACKUP_AND_DEPLOY_FILES ==="
+            find /opt/star45 -maxdepth 3 -type d \( -iname '*backup*' -o -iname '*rollback*' -o -iname '*runtime-public*' \) -print 2>/dev/null | head -80
+            ls -la /opt/star45/voiceflow-smart-workspace/deploy 2>/dev/null | head -80 || true
+            echo "=== DIAGNOSTIC_COMPLETE ==="
+
+      - name: Verify current public response from independent runner
         shell: bash
         run: |
-          set -u
-          echo "=== EXTERNAL_DNS ==="
-          getent ahostsv4 voice.star45.net || true
-          echo "=== EXTERNAL_HTTPS ==="
-          failures=0
-          for n in 1 2 3; do
-            code=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/voice-external -w '%{http_code}' https://voice.star45.net/) || code=000
-            size=$(wc -c < /tmp/voice-external 2>/dev/null || echo 0)
-            title=$(grep -o '<title>[^<]*' /tmp/voice-external 2>/dev/null | head -1 | sed 's/<title>//' || true)
-            echo "TRY=$n CODE=$code SIZE=$size TITLE=$title"
-            if [ "$code" != "200" ]; then failures=$((failures + 1)); fi
-            rm -f /tmp/voice-external
-            sleep 1
+          set -euo pipefail
+          for path in / /v4/mobile /app.js /api/health; do
+            code=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/voice-check -w '%{http_code}' "https://voice.star45.net$path?ts=$(date +%s)") || code=000
+            bytes=$(wc -c < /tmp/voice-check 2>/dev/null || echo 0)
+            title=$(grep -o '<title>[^<]*' /tmp/voice-check 2>/dev/null | head -1 | sed 's/<title>//' || true)
+            echo "EXTERNAL_PATH=$path CODE=$code BYTES=$bytes TITLE=$title"
+            rm -f /tmp/voice-check
           done
-          echo "FAILURES=$failures"
-          test "$failures" -eq 0
