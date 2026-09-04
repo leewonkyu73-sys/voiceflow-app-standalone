@@ -1,0 +1,110 @@
+name: Restore canonical Voice UI and quarantine retired screen v2
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/repair-voice-ui-isolation-v2.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-ui-production-isolation
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply guarded canonical UI route
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script_stop: false
+          script: |
+            set -e
+            RUN_ID='${{ github.run_id }}'
+            SCRIPT="/tmp/repair-voice-ui-isolation-$RUN_ID.sh"
+            curl -fsSL --retry 3 --retry-delay 1 \
+              https://raw.githubusercontent.com/leewonkyu73-sys/voiceflow-app-standalone/6339c0ce28ee0942eedfb36182fcbb3c2ca9fafa/ops/repair-voice-ui-isolation.sh \
+              -o "$SCRIPT"
+            chmod 700 "$SCRIPT"
+            RUN_ID="$RUN_ID" sh "$SCRIPT" apply
+
+      - name: Verify canonical UI from independent network
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.run_id }}'
+          INDEX="/tmp/voice-index-$RUN_ID"
+          APP="/tmp/voice-app-$RUN_ID"
+          HEALTH="/tmp/voice-health-$RUN_ID"
+          trap 'rm -f "$INDEX" "$APP" "$HEALTH"' EXIT
+
+          ROOT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "https://voice.star45.net/?ts=$RUN_ID")
+          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "https://voice.star45.net/app.js?ts=$RUN_ID")
+          HEALTH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o "$HEALTH" -w '%{http_code}' https://voice.star45.net/api/health)
+          RETIRED_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/v4/mobile)
+          RETIRED_LOCATION=$(curl -sSI --connect-timeout 10 --max-time 20 https://voice.star45.net/v4/mobile | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}' | tail -1)
+          FRONTEND_V4_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/frontend-v4/)
+          STYLE_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/style.css)
+          UNIFIED_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/voiceflow-unified-v13.js)
+          DISPATCH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/meeting-auto-dispatch-v361.js)
+          MANIFEST_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/manifest.webmanifest)
+
+          APP_BYTES=$(wc -c < "$APP")
+          APP_HASH=$(sha256sum "$APP" | awk '{print $1}')
+          test "$ROOT_CODE" = 200
+          test "$APP_CODE" = 200
+          test "$HEALTH_CODE" = 200
+          test "$RETIRED_CODE" = 308
+          case "$RETIRED_LOCATION" in
+            /|https://voice.star45.net/|http://voice.star45.net/) ;;
+            *) echo "Unexpected retired redirect: $RETIRED_LOCATION"; exit 1 ;;
+          esac
+          test "$FRONTEND_V4_CODE" = 410
+          test "$STYLE_CODE" = 200
+          test "$UNIFIED_CODE" = 200
+          test "$DISPATCH_CODE" = 200
+          test "$MANIFEST_CODE" = 200
+          test "$APP_BYTES" -gt 100000
+          test "$APP_HASH" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
+          grep -qF 'app.js?v=3.5.24' "$INDEX"
+          grep -qF 'liveComposer' "$APP"
+          grep -qF 'data-translation-input' "$APP"
+          ! grep -qF 'app.js?v=3.5.8?v=3.5.23' "$INDEX"
+
+          echo "EXTERNAL_ROOT=PASS CODE=$ROOT_CODE"
+          echo "EXTERNAL_CANONICAL_APP=PASS CODE=$APP_CODE BYTES=$APP_BYTES HASH=$APP_HASH"
+          echo "EXTERNAL_API_HEALTH=PASS CODE=$HEALTH_CODE"
+          echo "EXTERNAL_RETIRED_ROUTE=PASS CODE=$RETIRED_CODE LOCATION=$RETIRED_LOCATION"
+          echo "EXTERNAL_FRONTEND_V4_DISABLED=PASS CODE=$FRONTEND_V4_CODE"
+          echo "EXTERNAL_ASSETS=PASS STYLE=$STYLE_CODE UNIFIED=$UNIFIED_CODE DISPATCH=$DISPATCH_CODE MANIFEST=$MANIFEST_CODE"
+          echo 'EXTERNAL_VERIFICATION=PASS'
+
+      - name: Roll back edge if any verification fails
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script_stop: false
+          script: |
+            RUN_ID='${{ github.run_id }}'
+            SCRIPT="/tmp/repair-voice-ui-isolation-$RUN_ID.sh"
+            if [ ! -r "$SCRIPT" ]; then
+              curl -fsSL --retry 3 --retry-delay 1 \
+                https://raw.githubusercontent.com/leewonkyu73-sys/voiceflow-app-standalone/6339c0ce28ee0942eedfb36182fcbb3c2ca9fafa/ops/repair-voice-ui-isolation.sh \
+                -o "$SCRIPT"
+              chmod 700 "$SCRIPT"
+            fi
+            RUN_ID="$RUN_ID" sh "$SCRIPT" rollback
