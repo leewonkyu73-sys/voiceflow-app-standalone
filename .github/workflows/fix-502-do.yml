@@ -13,29 +13,29 @@ jobs:
           script_stop: false
           script: |
             set -x
-            echo "=== Fix do.ab80.net -> 3006 ==="
+            echo "=== 1. 카피본 에러 로그 ==="
+            pm2 logs voiceflow-standalone --lines 100 --nostream || pm2 logs 4 --lines 100 --nostream || true
+            echo "=== 2. 기존 가짜 do 삭제, 카피본 위치 찾기 ==="
+            pm2 delete do || true
+            pm2 delete voiceflow-standalone || true
+            pm2 delete voiceflow-standal || true
+            cd /root/voiceflow-app-standalone 2>/dev/null || cd ~/voiceflow-app-standalone || cd /opt/voiceflow-app-standalone || cd /opt/star45/voiceflow-app-standalone || true
+            pwd; ls -la
+            cat package.json | head -30
+            echo "=== 3. 카피본 재빌드 ==="
+            rm -rf .next node_modules/.cache || true
+            npm install
+            npm run build
+            echo "=== 4. 카피본을 do 이름으로 3006에 실행 ==="
+            PORT=3006 pm2 start npm --name do -- start
+            pm2 save
+            echo "=== 5. Nginx do.ab80.net -> 3006 연결 ==="
             cat > /etc/nginx/sites-available/do.ab80.net <<'EOF'
-            server {
-              listen 80;
-              server_name do.ab80.net;
-              location / {
-                proxy_pass http://127.0.0.1:3006;
-                proxy_http_version 1.1;
-                proxy_set_header Upgrade $http_upgrade;
-                proxy_set_header Connection 'upgrade';
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-              }
-            }
+            server { listen 80; server_name do.ab80.net; location / { proxy_pass http://127.0.0.1:3006; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection 'upgrade'; proxy_set_header Host $host; } }
             EOF
             ln -sf /etc/nginx/sites-available/do.ab80.net /etc/nginx/sites-enabled/do.ab80.net
-            rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-            pm2 list
-            pm2 restart do --update-env || (cd /root/voiceflow-app-standalone 2>/dev/null || cd ~/voiceflow-app-standalone; PORT=3006 pm2 start npm --name do -- start)
             nginx -t && systemctl reload nginx
-            sleep 2
-            curl -I http://127.0.0.1:3006 || true
-            curl -I http://do.ab80.net || true
-            echo "DONE"
+            sleep 3
+            pm2 list
+            curl -s http://127.0.0.1:3006 | head -100
+            echo "DONE - do.ab80.net은 이제 카피본(voice 복사본)입니다"
