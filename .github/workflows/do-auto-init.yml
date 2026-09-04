@@ -1,0 +1,108 @@
+name: DO - Auto Init & Rename to do
+on:
+  workflow_dispatch:
+jobs:
+  init-do:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /opt/star45/voiceflow-app-standalone
+            
+            echo "=== 1. 앱 이름 do로 변경 ==="
+            npm pkg set name=do || true
+            
+            echo "=== 2. PM2 do로 변경 ==="
+            pm2 delete voiceflow-standalone || true
+            pm2 delete voiceflow-app-standalone || true
+            pm2 delete do || true
+            pm2 start npm --name do -- start -- --port 3006 || pm2 restart do || true
+            pm2 save
+            
+            echo "=== 3. do 기능 뼈대 생성 (녹음→STT→번역) ==="
+            mkdir -p app/do app/api/do/transcribe app/api/do/translate hooks
+            
+            cat > hooks/useDoRecorder.ts <<'TS'
+            import { useState, useRef } from 'react';
+            export function useDoRecorder() {
+              const [recording, setRecording] = useState(false);
+              const [audioBlob, setAudioBlob] = useState<Blob|null>(null);
+              const mediaRef = useRef<MediaRecorder|null>(null);
+              const chunks = useRef<Blob[]>([]);
+              const start = async () => {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                chunks.current = [];
+                const mr = new MediaRecorder(stream);
+                mediaRef.current = mr;
+                mr.ondataavailable = e => chunks.current.push(e.data);
+                mr.onstop = () => { setAudioBlob(new Blob(chunks.current, {type:'audio/webm'})); stream.getTracks().forEach(t=>t.stop()); };
+                mr.start(); setRecording(true);
+              };
+              const stop = () => { mediaRef.current?.stop(); setRecording(false); };
+              return { recording, audioBlob, start, stop };
+            }
+            TS
+            
+            cat > app/api/do/transcribe/route.ts <<'TS'
+            import { NextRequest, NextResponse } from 'next/server';
+            export async function POST(req: NextRequest) {
+              const form = await req.formData();
+              const file = form.get('audio') as Blob;
+              if(!file) return NextResponse.json({error:'no audio'}, {status:400});
+              // TODO: Whisper API 연결 - 지금은 mock
+              // const openai = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
+              // const text = await openai.audio.transcriptions.create({file, model:'whisper-1'});
+              return NextResponse.json({ text: '안녕하세요 do 앱 테스트입니다. (Whisper 연결 전 mock)', lang: 'ko' });
+            }
+            TS
+            
+            cat > app/api/do/translate/route.ts <<'TS'
+            import { NextRequest, NextResponse } from 'next/server';
+            export async function POST(req: NextRequest) {
+              const { text, target } = await req.json();
+              // TODO: LibreTranslate / OpenAI 번역 연결
+              return NextResponse.json({ translated: `[${target}] ${text} (번역 mock)`, target });
+            }
+            TS
+            
+            cat > app/do/page.tsx <<'TS'
+            'use client';
+            import { useDoRecorder } from '@/hooks/useDoRecorder';
+            import { useState } from 'react';
+            export default function DoPage() {
+              const { recording, audioBlob, start, stop } = useDoRecorder();
+              const [text, setText] = useState(''); const [translated, setTranslated] = useState('');
+              const handleTranscribe = async () => {
+                if(!audioBlob) return;
+                const fd = new FormData(); fd.append('audio', audioBlob, 'rec.webm');
+                const r = await fetch('/api/do/transcribe', {method:'POST', body:fd});
+                const j = await r.json(); setText(j.text);
+              };
+              const handleTranslate = async (target: string) => {
+                const r = await fetch('/api/do/translate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, target})});
+                const j = await r.json(); setTranslated(j.translated);
+              };
+              return (
+                <div style={{padding:32, maxWidth:720, margin:'0 auto'}}>
+                  <h1 style={{fontSize:32, fontWeight:800}}>DO - 녹음 → 텍스트 → 번역</h1>
+                  <button onClick={recording?stop:start} style={{marginTop:24, padding:'16px 32px', background: recording?'#ef4444':'#000', color:'#fff', borderRadius:12, fontSize:18}}>
+                    {recording ? '● 녹음 중지' : '● 녹음 시작'}
+                  </button>
+                  {audioBlob && <button onClick={handleTranscribe} style={{marginLeft:12, padding:'16px 24px', border:'1px solid #000', borderRadius:12}}>텍스트 변환</button>}
+                  {text && <div style={{marginTop:24, padding:16, background:'#f5f5f5', borderRadius:12}}><b>원문:</b> {text}<div style={{marginTop:12}}><button onClick={()=>handleTranslate('en')}>영어로</button> <button onClick={()=>handleTranslate('vi')}>베트남어로</button></div></div>}
+                  {translated && <div style={{marginTop:16, padding:16, background:'#000', color:'#fff', borderRadius:12}}><b>번역:</b> {translated}</div>}
+                </div>
+              );
+            }
+            TS
+            
+            npm run build || true
+            pm2 restart do
+            echo "=== DONE: do 앱으로 전환 완료 ==="
+            pm2 list
