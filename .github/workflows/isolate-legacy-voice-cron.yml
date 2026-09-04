@@ -1,0 +1,252 @@
+name: Isolate destructive legacy Voice cron jobs
+
+on:
+  push:
+    branches:
+      - ops/voice-stt-translation-diagnostic
+    paths:
+      - .github/workflows/isolate-legacy-voice-cron.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolate-legacy-voice-cron
+  cancel-in-progress: false
+
+jobs:
+  isolate_and_repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Isolate legacy cron, align disk and restart-test Voice
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 17m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            RUNTIME=/opt/star45/voiceflow-runtime-public
+            RUN_KEY='${{ github.run_id }}'
+            BACKUP=/opt/star45/quarantine/voice-legacy-cron-isolation-$RUN_KEY
+            STAGE=/tmp/voice-legacy-cron-stage-$RUN_KEY
+            PATCH=/tmp/patch-server-mobile-$RUN_KEY.mjs
+            AUDIO=/tmp/voice-cron-isolation-$RUN_KEY.webm
+            LOW=/tmp/voice-cron-isolation-low-$RUN_KEY.webm
+            ROOT_CRON_BEFORE=/tmp/root-cron-before-$RUN_KEY
+            ROOT_CRON_AFTER=/tmp/root-cron-after-$RUN_KEY
+            ETC_CRON_AFTER=/tmp/etc-crontab-after-$RUN_KEY
+            AUTO=/usr/local/bin/voiceflow-auto-deploy.sh
+            PROXY_FIX=/opt/voiceflow-proxy/fix.sh
+            AUTO_SHA=618333a38586747d7603c3a437278d47306969eb544fad02fb3986e09f736cce
+            PROXY_SHA=a8c05fc1cba23a5dd22b723005f9fa933f70f81f094978e5053bc1454f00749f
+            SUCCESS=0
+
+            cleanup() {
+              code=$?
+              if [ "$code" -ne 0 ]; then
+                echo '=== FAILURE_STATE ==='
+                curl -sS --max-time 8 https://voice.star45.net/api/health || true
+                echo
+                PM2_HOME=/root/.pm2 pm2 list || true
+                nginx -t 2>&1 || true
+              fi
+              rm -rf "$STAGE" "$PATCH" "$AUDIO" "$LOW" "$ROOT_CRON_BEFORE" "$ROOT_CRON_AFTER" "$ETC_CRON_AFTER" /tmp/voice-cron-*.json
+              exit "$code"
+            }
+            trap cleanup EXIT INT TERM
+
+            echo '=== 1. PRECHECK ==='
+            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            uptime
+            free -m
+            df -h /
+            nginx -t
+            test "$(curl -sS --max-time 10 -o /tmp/voice-cron-pre-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-pre-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            PM2_HOME=/root/.pm2 pm2 describe voice-core-full | grep -q 'online'
+            test "$(docker inspect --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' voiceflow-local-stt)" = 'running unless-stopped'
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
+            test "$(sha256sum "$AUTO" | awk '{print $1}')" = "$AUTO_SHA"
+            test "$(sha256sum "$PROXY_FIX" | awk '{print $1}')" = "$PROXY_SHA"
+            crontab -l > "$ROOT_CRON_BEFORE"
+            grep -qF '/opt/voiceflow-proxy/fix.sh' "$ROOT_CRON_BEFORE"
+            grep -qF '/usr/local/bin/voiceflow-auto-deploy.sh' /etc/crontab
+
+            echo '=== 2. BACKUP ==='
+            mkdir -p "$BACKUP"
+            chmod 700 "$BACKUP"
+            cp -a "$ROOT_CRON_BEFORE" "$BACKUP/root.crontab.before"
+            cp -a /etc/crontab "$BACKUP/etc.crontab.before"
+            cp -a "$AUTO" "$BACKUP/voiceflow-auto-deploy.sh"
+            cp -a "$PROXY_FIX" "$BACKUP/voiceflow-proxy-fix.sh"
+            cp -a /tmp/final.conf "$BACKUP/final.conf" 2>/dev/null || true
+            docker inspect voiceflow-proxy > "$BACKUP/voiceflow-proxy.inspect.json" 2>/dev/null || true
+            docker logs --tail 120 voiceflow-proxy > "$BACKUP/voiceflow-proxy.log" 2>&1 || true
+            for f in app.js index.html sw.js; do
+              cp -a "$ROOT/public/$f" "$BACKUP/source-$f"
+              cp -a "$RUNTIME/$f" "$BACKUP/runtime-$f"
+            done
+            cp -a "$ROOT/server-v2.mjs" "$BACKUP/server-v2.mjs"
+            cp -a /root/.pm2/dump.pm2 "$BACKUP/dump.pm2" 2>/dev/null || true
+            node -e "const fs=require('fs'),d='/opt/star45/voiceflow-data',o={};for(const n of ['users','sessions','meetings','captions'])o[n]=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8')).length;fs.writeFileSync(process.argv[1],JSON.stringify(o,null,2));console.log('DATA_BEFORE='+JSON.stringify(o))" "$BACKUP/counts-before.json"
+
+            echo '=== 3. DISABLE_EXACT_CRON_ENTRIES ==='
+            awk '!/\/opt\/voiceflow-proxy\/fix\.sh/' "$ROOT_CRON_BEFORE" > "$ROOT_CRON_AFTER"
+            crontab "$ROOT_CRON_AFTER"
+            awk '!/\/usr\/local\/bin\/voiceflow-auto-deploy\.sh/' /etc/crontab > "$ETC_CRON_AFTER"
+            install -m 644 "$ETC_CRON_AFTER" /etc/crontab
+            systemctl reload cron 2>/dev/null || true
+            ! crontab -l 2>/dev/null | grep -qF '/opt/voiceflow-proxy/fix.sh'
+            ! grep -qF '/usr/local/bin/voiceflow-auto-deploy.sh' /etc/crontab
+
+            echo '=== 4. QUARANTINE_EXECUTION_PATHS ==='
+            cat > "$AUTO" <<'EOF'
+            #!/bin/sh
+            echo 'RETIRED: destructive Voice auto-deploy is quarantined' >&2
+            exit 0
+            EOF
+            cat > "$PROXY_FIX" <<'EOF'
+            #!/bin/sh
+            echo 'RETIRED: legacy Voice Docker proxy recreation is quarantined' >&2
+            exit 0
+            EOF
+            chmod 700 "$AUTO" "$PROXY_FIX"
+            grep -qF 'RETIRED: destructive Voice auto-deploy' "$AUTO"
+            grep -qF 'RETIRED: legacy Voice Docker proxy' "$PROXY_FIX"
+            sleep 3
+            docker rm -f voiceflow-proxy voiceflow-emergency-proxy >/dev/null 2>&1 || true
+            ! docker inspect voiceflow-proxy >/dev/null 2>&1
+            echo 'LEGACY_CRON_ISOLATED=PASS'
+            echo 'LEGACY_PROXY_REMOVED=PASS'
+
+            echo '=== 5. STAGE_VERIFIED_DISK_FILES ==='
+            mkdir -p "$STAGE/public"
+            cp -a "$RUNTIME/app.js" "$STAGE/public/app.js"
+            cp -a "$RUNTIME/index.html" "$STAGE/public/index.html"
+            cp -a "$RUNTIME/sw.js" "$STAGE/public/sw.js"
+            cp -a "$ROOT/server-v2.mjs" "$STAGE/server-v2.mjs"
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 6b0dc037bdb67692d6267bfcb5a8ac189cd9dfed
+            git -C "$ROOT" -c safe.directory="$ROOT" show 6b0dc037bdb67692d6267bfcb5a8ac189cd9dfed:ops/patch-server-mobile-speech-floor-v3525.mjs > "$PATCH"
+            node "$PATCH" "$STAGE/server-v2.mjs"
+            node --check "$STAGE/public/app.js"
+            node --check "$STAGE/server-v2.mjs"
+            grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' "$STAGE/public/app.js"
+            grep -qF 'r.interimResults=!mobileBrowserSpeech' "$STAGE/public/app.js"
+            grep -qF 'blob.size>=mobileMinBytes' "$STAGE/public/app.js"
+            grep -qF 'chatText' "$STAGE/public/app.js"
+            grep -qF 'sendChat' "$STAGE/public/app.js"
+            grep -qF "reason:'audio_below_speech_floor'" "$STAGE/server-v2.mjs"
+            grep -qF 'app.js?v=3.5.25' "$STAGE/public/index.html"
+            grep -qF 'voiceflow-shell-v3525-mobile-voice-safe' "$STAGE/public/sw.js"
+
+            echo '=== 6. INSTALL_AND_RESTART_FROM_DISK ==='
+            install -m 644 "$STAGE/public/app.js" "$ROOT/public/app.js"
+            install -m 644 "$STAGE/public/index.html" "$ROOT/public/index.html"
+            install -m 644 "$STAGE/public/sw.js" "$ROOT/public/sw.js"
+            install -m 644 "$STAGE/server-v2.mjs" "$ROOT/server-v2.mjs"
+            cmp -s "$ROOT/public/app.js" "$RUNTIME/app.js"
+            cmp -s "$ROOT/public/index.html" "$RUNTIME/index.html"
+            cmp -s "$ROOT/public/sw.js" "$RUNTIME/sw.js"
+            grep -qF "reason:'audio_below_speech_floor'" "$ROOT/server-v2.mjs"
+            PM2_HOME=/root/.pm2 pm2 restart voice-core-full --update-env
+            ready=0
+            for n in $(seq 1 40); do
+              if curl -fsSL --max-time 3 http://127.0.0.1:4190/api/health >/tmp/voice-cron-post-health.json 2>/dev/null; then ready=1; break; fi
+              sleep 1
+            done
+            test "$ready" = 1
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-post-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            PID=$(PM2_HOME=/root/.pm2 pm2 pid voice-core-full)
+            test -n "$PID"
+            tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^PORT=4190$'
+            tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^DATA_DIR=/opt/star45/voiceflow-data$'
+
+            echo '=== 7. REAL_MOBILE_E2E ==='
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin ae2fb5d9aee5904104718027336d84584aef6e41
+            git -C "$ROOT" -c safe.directory="$ROOT" show ae2fb5d9aee5904104718027336d84584aef6e41:ops/voice-stt-canary.webm.b64 | tr -d '\r\n' | base64 -d > "$AUDIO"
+            truncate -s 16000 "$AUDIO"
+            dd if=/dev/zero of="$LOW" bs=2000 count=1 status=none
+            curl -fsSL --max-time 15 http://127.0.0.1:4190/api/v1/meetings -o /tmp/voice-cron-meetings.json
+            MID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-meetings.json','utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" )
+            LOW_CODE=$(curl -sS --max-time 15 -X POST "http://127.0.0.1:4190/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-duration-ms: 6500' --data-binary "@$LOW" -o /tmp/voice-cron-low.json -w '%{http_code}')
+            test "$LOW_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-low.json','utf8'));if(!d.ok||!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1);console.log('SILENCE_GATE=PASS')"
+            REAL_CODE=$(curl -sS --max-time 80 -X POST "http://127.0.0.1:4190/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: en-US' -H 'x-voice-target: ko-KR' -H 'x-voice-duration-ms: 3300' --data-binary "@$AUDIO" -o /tmp/voice-cron-real.json -w '%{http_code}')
+            test "$REAL_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-real.json','utf8'));if(!d.ok||!String(d.text||'').trim()||!String(d.translation||'').trim()||!/local-whisper/i.test(String(d.provider||'')))process.exit(1);console.log('MOBILE_ORIGINAL='+d.text);console.log('MOBILE_TRANSLATION='+d.translation);console.log('STT_PROVIDER='+d.provider);console.log('TRANSLATION_PROVIDER='+d.translation_provider);console.log('REAL_MOBILE_E2E=PASS')"
+
+            echo '=== 8. STABILITY_ACROSS_CRON_BOUNDARIES ==='
+            sha256sum "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$ROOT/public/index.html" "$ROOT/public/sw.js" > "$BACKUP/hashes-after-install.txt"
+            START_LOG_SIZE=$(stat -c '%s' /var/log/voiceflow-deploy.log 2>/dev/null || echo 0)
+            sleep 75
+            ! crontab -l 2>/dev/null | grep -qF '/opt/voiceflow-proxy/fix.sh'
+            ! grep -qF '/usr/local/bin/voiceflow-auto-deploy.sh' /etc/crontab
+            ! docker inspect voiceflow-proxy >/dev/null 2>&1
+            sha256sum -c "$BACKUP/hashes-after-install.txt"
+            END_LOG_SIZE=$(stat -c '%s' /var/log/voiceflow-deploy.log 2>/dev/null || echo 0)
+            test "$END_LOG_SIZE" = "$START_LOG_SIZE"
+            grep -qF "reason:'audio_below_speech_floor'" "$ROOT/server-v2.mjs"
+            cmp -s "$ROOT/public/app.js" "$RUNTIME/app.js"
+            PM2_HOME=/root/.pm2 pm2 describe voice-core-full | grep -q 'online'
+            test "$(curl -sS --max-time 12 -o /tmp/voice-cron-stable-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-cron-stable-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            echo 'CRON_BOUNDARY_STABILITY=PASS'
+
+            echo '=== 9. REGRESSION_AND_PERSISTENCE ==='
+            test "$(curl -sS --max-time 12 -o /tmp/voice-cron-public-app.js -w '%{http_code}' 'https://voice.star45.net/app.js?v=3.5.25')" = 200
+            cmp -s "$RUNTIME/app.js" /tmp/voice-cron-public-app.js
+            grep -qF 'chatText' /tmp/voice-cron-public-app.js
+            grep -qF 'sendChat' /tmp/voice-cron-public-app.js
+            test "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
+            test "$(docker inspect --format '{{.State.Status}}' voiceflow-local-stt)" = running
+            grep -A5 -F 'location ^~ /api/' /etc/nginx/sites-enabled/voice.star45.net | grep -qF 'proxy_pass http://127.0.0.1:4190;'
+            node -e "const fs=require('fs'),before=JSON.parse(fs.readFileSync(process.argv[1],'utf8')),d='/opt/star45/voiceflow-data';for(const n of ['users','sessions','meetings','captions']){const current=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8')).length;if(current<before[n])throw new Error(n+'_count_decreased')}console.log('DATA_PRESERVED=PASS')" "$BACKUP/counts-before.json"
+            nginx -t
+            PM2_HOME=/root/.pm2 pm2 save
+            printf 'status=PASS\nretired_root_cron=/opt/voiceflow-proxy/fix.sh\nretired_system_cron=/usr/local/bin/voiceflow-auto-deploy.sh\nproxy_container=removed\nmobile_android=browser_speech_primary\nmobile_silence_gate=enabled\nrestart_test=passed\ncron_boundary_test=passed\nrollback_assets=%s\n' "$BACKUP" > "$BACKUP/README.txt"
+            SUCCESS=1
+            echo 'DESTRUCTIVE_AUTO_DEPLOY=QUARANTINED'
+            echo 'LEGACY_DOCKER_PROXY=QUARANTINED'
+            echo 'MOBILE_FIX_PERSISTED=PASS'
+            echo 'TEXT_INPUT_PRESERVED=PASS'
+            echo 'PC_AND_DO_REGRESSION=PASS'
+            echo "BACKUP=$BACKUP"
+
+      - name: Verify public result independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=https://voice.star45.net
+          RUN_KEY='${{ github.run_id }}'
+          trap 'rm -f /tmp/vf-*' EXIT
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/vf-root -w '%{http_code}' "$BASE/?v=3.5.25-$RUN_KEY")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/vf-app -w '%{http_code}' "$BASE/app.js?v=3.5.25-$RUN_KEY")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/vf-health -w '%{http_code}' "$BASE/api/health")" = 200
+          grep -qF 'app.js?v=3.5.25' /tmp/vf-root
+          grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' /tmp/vf-app
+          grep -qF 'r.interimResults=!mobileBrowserSpeech' /tmp/vf-app
+          grep -qF 'blob.size>=mobileMinBytes' /tmp/vf-app
+          grep -qF 'chatText' /tmp/vf-app
+          grep -qF 'sendChat' /tmp/vf-app
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+          curl -fsSL --max-time 20 "$BASE/api/v1/meetings" -o /tmp/vf-meetings
+          MID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-meetings','utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" )
+          dd if=/dev/zero of=/tmp/vf-low bs=2000 count=1 status=none
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -X POST "$BASE/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-duration-ms: 6500' --data-binary @/tmp/vf-low -o /tmp/vf-low-response -w '%{http_code}')" = 200
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-low-response','utf8'));if(!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1)"
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/v4/mobile")" = 308
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/frontend-v4/")" = 410
+          for port in 3005 3006 4186 4190; do
+            code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            echo "DIRECT_PORT_$port=$code"
+            test "$code" = 000
+          done
+          echo 'INDEPENDENT_PUBLIC_VERIFICATION=PASS'
