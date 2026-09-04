@@ -1,0 +1,44 @@
+name: Verify Voice isolation regression safety
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/verify-voice-isolation-regression.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify public domains and blocked internal ports
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_url() {
+            name=$1
+            url=$2
+            file="/tmp/$name"
+            code=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$file" -w '%{http_code}' "$url")
+            bytes=$(wc -c < "$file")
+            title=$(grep -o '<title>[^<]*' "$file" 2>/dev/null | head -1 | sed 's/<title>//' || true)
+            rm -f "$file"
+            echo "$name CODE=$code BYTES=$bytes TITLE=$title"
+            test "$code" = 200
+          }
+
+          check_url VOICE_ROOT "https://voice.star45.net/?ts=${{ github.run_id }}"
+          check_url VOICE_HEALTH "https://voice.star45.net/api/health"
+          check_url DO_ROOT "https://do.ab80.net/?ts=${{ github.run_id }}"
+          check_url TV_ROOT "https://tv.star45.net/?ts=${{ github.run_id }}"
+
+          for port in 3005 3006; do
+            code=$(curl -sS --connect-timeout 5 --max-time 8 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            echo "DIRECT_PORT_$port CODE=$code"
+            test "$code" = 000
+          done
+
+          echo 'VOICE_ISOLATION_REGRESSION=PASS'
