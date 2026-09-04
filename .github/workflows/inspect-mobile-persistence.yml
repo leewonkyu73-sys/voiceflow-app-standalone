@@ -1,4 +1,4 @@
-name: Inspect mobile voice disk and runtime persistence
+name: Align mobile voice source files with verified runtime
 
 on:
   push:
@@ -11,54 +11,81 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  align:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
-      - name: Inspect production files and PM2 path without changes
+      - name: Stage, verify and align source files
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 5m
-          script_stop: false
+          command_timeout: 7m
+          script_stop: true
           script: |
-            set -u
+            set -euo pipefail
             ROOT=/opt/star45/voiceflow-smart-workspace
             RUNTIME=/opt/star45/voiceflow-runtime-public
-            echo '=== HEALTH ==='
-            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
-            curl -sS --max-time 8 https://voice.star45.net/api/health || true
-            echo
-            echo '=== FILE_HASHES_AND_MARKERS ==='
-            for f in "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$RUNTIME/app.js" "$ROOT/public/index.html" "$RUNTIME/index.html" "$ROOT/public/sw.js" "$RUNTIME/sw.js"; do
-              if [ -f "$f" ]; then
-                echo "FILE=$f SIZE=$(wc -c < "$f") SHA=$(sha256sum "$f" | awk '{print $1}')"
-                for marker in "audio_below_speech_floor" "if(mobileSpeech&&!mobileBrowserSpeech)" "blob.size>=mobileMinBytes" "app.js?v=3.5.25" "voiceflow-shell-v3525-mobile-voice-safe"; do
-                  echo "MARKER=$marker COUNT=$(grep -Foc "$marker" "$f" 2>/dev/null || true)"
-                done
-              fi
-            done
-            echo '=== PM2 ==='
-            PM2_HOME=/root/.pm2 pm2 describe voice-core-full 2>/dev/null || true
-            echo '=== WRAPPER ==='
-            for f in /opt/star45/runtime/voice-core-full/start.sh /root/.pm2/dump.pm2; do
-              if [ -f "$f" ]; then
-                echo "FILE=$f"
-                if [ "$f" = /root/.pm2/dump.pm2 ]; then
-                  grep -E 'voice-core-full|pm_exec_path|pm_cwd|PORT|DATA_DIR' "$f" | head -80 || true
-                else
-                  sed -n '1,160p' "$f"
-                fi
-              fi
-            done
-            echo '=== PROCESS_CMDLINE ==='
-            pid=$(PM2_HOME=/root/.pm2 pm2 pid voice-core-full 2>/dev/null || true)
-            echo "PID=$pid"
-            [ -n "$pid" ] && tr '\0' ' ' < "/proc/$pid/cmdline" && echo || true
-            [ -n "$pid" ] && readlink -f "/proc/$pid/cwd" || true
-            echo '=== WORKTREE_STATUS ==='
-            git -C "$ROOT" -c safe.directory="$ROOT" status --short | head -80 || true
-            echo 'INSPECTION_COMPLETE=YES'
+            RUN_KEY='${{ github.run_id }}'
+            STAGE=/tmp/voice-mobile-align-$RUN_KEY
+            BACKUP=/opt/star45/quarantine/voice-mobile-align-$RUN_KEY
+            PATCH=/tmp/patch-server-mobile-$RUN_KEY.mjs
+            trap 'rm -rf "$STAGE" "$PATCH"' EXIT
+
+            echo '=== PRECHECK ==='
+            test "$(curl -sS --max-time 10 -o /tmp/voice-align-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-align-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            rm -f /tmp/voice-align-health.json
+            grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' "$RUNTIME/app.js"
+            grep -qF 'blob.size>=mobileMinBytes' "$RUNTIME/app.js"
+            grep -qF 'app.js?v=3.5.25' "$RUNTIME/index.html"
+            grep -qF 'voiceflow-shell-v3525-mobile-voice-safe' "$RUNTIME/sw.js"
+
+            echo '=== STAGE_AND_VERIFY ==='
+            mkdir -p "$STAGE/public"
+            cp -a "$RUNTIME/app.js" "$STAGE/public/app.js"
+            cp -a "$RUNTIME/index.html" "$STAGE/public/index.html"
+            cp -a "$RUNTIME/sw.js" "$STAGE/public/sw.js"
+            cp -a "$ROOT/server-v2.mjs" "$STAGE/server-v2.mjs"
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 6b0dc037bdb67692d6267bfcb5a8ac189cd9dfed
+            git -C "$ROOT" -c safe.directory="$ROOT" show 6b0dc037bdb67692d6267bfcb5a8ac189cd9dfed:ops/patch-server-mobile-speech-floor-v3525.mjs > "$PATCH"
+            node "$PATCH" "$STAGE/server-v2.mjs"
+            node --check "$STAGE/public/app.js"
+            node --check "$STAGE/server-v2.mjs"
+            grep -qF "reason:'audio_below_speech_floor'" "$STAGE/server-v2.mjs"
+            grep -qF 'chatText' "$STAGE/public/app.js"
+            grep -qF 'sendChat' "$STAGE/public/app.js"
+
+            echo '=== BACKUP_AND_ALIGN ==='
+            mkdir -p "$BACKUP"
+            chmod 700 "$BACKUP"
+            for f in app.js index.html sw.js; do cp -a "$ROOT/public/$f" "$BACKUP/$f"; done
+            cp -a "$ROOT/server-v2.mjs" "$BACKUP/server-v2.mjs"
+            install -m 644 "$STAGE/public/app.js" "$ROOT/public/app.js"
+            install -m 644 "$STAGE/public/index.html" "$ROOT/public/index.html"
+            install -m 644 "$STAGE/public/sw.js" "$ROOT/public/sw.js"
+            install -m 644 "$STAGE/server-v2.mjs" "$ROOT/server-v2.mjs"
+
+            echo '=== VERIFY_DISK ==='
+            cmp -s "$ROOT/public/app.js" "$RUNTIME/app.js"
+            cmp -s "$ROOT/public/index.html" "$RUNTIME/index.html"
+            cmp -s "$ROOT/public/sw.js" "$RUNTIME/sw.js"
+            grep -qF "reason:'audio_below_speech_floor'" "$ROOT/server-v2.mjs"
+            node --check "$ROOT/server-v2.mjs"
+            sha256sum "$ROOT/public/app.js" "$ROOT/public/index.html" "$ROOT/public/sw.js" "$ROOT/server-v2.mjs"
+            printf 'status=PASS\nservice_restarted=no\nrollback=%s\n' "$BACKUP" > "$BACKUP/README.txt"
+            echo 'SOURCE_UI_ALIGNED=PASS'
+            echo 'SERVER_DISK_PATCHED=PASS'
+            echo 'SERVICE_RESTARTED=NO'
+            echo "BACKUP=$BACKUP"
+
+      - name: Confirm public service remained healthy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+          rm -f /tmp/health
+          echo 'PUBLIC_SERVICE_UNCHANGED=PASS'
