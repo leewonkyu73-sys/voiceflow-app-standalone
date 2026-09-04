@@ -1,4 +1,4 @@
-name: Preflight full Voice API cutover
+name: Cut over Voice API to verified full core
 
 on:
   push:
@@ -10,12 +10,104 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: voice-full-core-production-cutover
+  cancel-in-progress: false
+
 jobs:
-  preflight:
+  cutover:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 25
     steps:
-      - name: Inspect API edge, PM2 and production data without changes
+      - name: Apply guarded full-core cutover on VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            SCRIPT=/tmp/cutover-full-voice-core-${{ github.run_id }}.sh
+            trap 'rm -f "$SCRIPT"' EXIT
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d
+            git -C "$ROOT" -c safe.directory="$ROOT" show 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d:ops/cutover-full-voice-core.sh > "$SCRIPT"
+            chmod 700 "$SCRIPT"
+            RUN_KEY=${{ github.run_id }} bash "$SCRIPT" apply
+
+      - name: Verify public UI and full API from independent network
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.run_id }}'
+          BASE='https://voice.star45.net'
+          INDEX=/tmp/voice-index-$RUN_ID.html
+          APP=/tmp/voice-app-$RUN_ID.js
+          HEALTH=/tmp/voice-health-$RUN_ID.json
+          MEETINGS=/tmp/voice-meetings-$RUN_ID.json
+          CONTRACT=/tmp/voice-contract-$RUN_ID.json
+          trap 'rm -f "$INDEX" "$APP" "$HEALTH" "$MEETINGS" "$CONTRACT"' EXIT
+
+          ROOT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "$BASE/?ts=$RUN_ID")
+          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "$BASE/app.js?ts=$RUN_ID")
+          HEALTH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$HEALTH" -w '%{http_code}' "$BASE/api/health")
+          STYLE_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/style.css?ts=$RUN_ID")
+          UNIFIED_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/voiceflow-unified-v13.js?ts=$RUN_ID")
+          DISPATCH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/meeting-auto-dispatch-v361.js?ts=$RUN_ID")
+          MANIFEST_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/manifest.webmanifest?ts=$RUN_ID")
+          RETIRED_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/v4/mobile")
+          RETIRED_LOCATION=$(curl -sSI --connect-timeout 10 --max-time 20 "$BASE/v4/mobile" | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}' | tail -1)
+          FRONTEND_V4_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' "$BASE/frontend-v4/")
+
+          test "$ROOT_CODE" = 200
+          test "$APP_CODE" = 200
+          test "$HEALTH_CODE" = 200
+          test "$STYLE_CODE" = 200
+          test "$UNIFIED_CODE" = 200
+          test "$DISPATCH_CODE" = 200
+          test "$MANIFEST_CODE" = 200
+          test "$RETIRED_CODE" = 308
+          case "$RETIRED_LOCATION" in
+            /|https://voice.star45.net/|http://voice.star45.net/) ;;
+            *) echo "Unexpected retired redirect: $RETIRED_LOCATION"; exit 1 ;;
+          esac
+          test "$FRONTEND_V4_CODE" = 410
+
+          APP_HASH=$(sha256sum "$APP" | awk '{print $1}')
+          test "$APP_HASH" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
+          grep -qF 'app.js?v=3.5.24' "$INDEX"
+          ! grep -qF 'app.js?v=3.5.8?v=3.5.23' "$INDEX"
+          grep -qF 'liveComposer' "$APP"
+          grep -qF 'data-translation-input' "$APP"
+          grep -qF '/transcribe' "$APP"
+          grep -qF "'x-voice-client':'v4-mobile'" "$APP"
+          node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1);console.log('PUBLIC_HEALTH='+JSON.stringify({service:d.service,version:d.version}))" "$HEALTH"
+
+          MEETINGS_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o "$MEETINGS" -w '%{http_code}' "$BASE/api/v1/meetings")
+          test "$MEETINGS_CODE" = 200
+          MID=$(node -e "const d=require(process.argv[1]),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" "$MEETINGS")
+          CONTRACT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -X POST "$BASE/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-target: en-US' --data-binary 'tiny' -o "$CONTRACT" -w '%{http_code}')
+          test "$CONTRACT_CODE" = 400
+          node -e "const d=require(process.argv[1]);if(d.error!=='audio_empty')process.exit(1)" "$CONTRACT"
+
+          for port in 3005 3006 4186 4190; do
+            code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            echo "DIRECT_PORT_$port=$code"
+            test "$code" = 000
+          done
+
+          echo "PUBLIC_ROOT=PASS CODE=$ROOT_CODE"
+          echo "PUBLIC_CANONICAL_APP=PASS CODE=$APP_CODE HASH=$APP_HASH"
+          echo "PUBLIC_FULL_API=PASS CODE=$HEALTH_CODE VERSION=2.0.0"
+          echo "PUBLIC_TRANSCRIBE_CONTRACT=PASS CODE=$CONTRACT_CODE ERROR=audio_empty"
+          echo "PUBLIC_RETIRED_ROUTES=PASS V4=$RETIRED_CODE FRONTEND_V4=$FRONTEND_V4_CODE"
+          echo "PUBLIC_ASSETS=PASS STYLE=$STYLE_CODE UNIFIED=$UNIFIED_CODE DISPATCH=$DISPATCH_CODE MANIFEST=$MANIFEST_CODE"
+          echo 'EXTERNAL_VERIFICATION=PASS'
+
+      - name: Confirm persistent runtime, data and rollback guards
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
@@ -23,45 +115,74 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: 22
           command_timeout: 5m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            DATA=/opt/star45/voiceflow-data
+            RUN_ID='${{ github.run_id }}'
+            BACKUP=/opt/star45/quarantine/voice-full-core-cutover-$RUN_ID
+            PM2_HOME=/root/.pm2
+
+            test -d "$BACKUP"
+            test -s "$BACKUP/voiceflow-data.tgz"
+            test -s "$BACKUP/nginx.conf"
+            PM2_HOME="$PM2_HOME" pm2 describe voice-core-full | grep -q 'online'
+            PM2_HOME="$PM2_HOME" pm2 describe voice | grep -q 'online'
+            PM2_HOME="$PM2_HOME" pm2 describe do | grep -q 'online'
+            grep -q 'voice-core-full' "$PM2_HOME/dump.pm2"
+            test "$(curl -sS --max-time 8 -o /tmp/voice-full-health-$RUN_ID -w '%{http_code}' http://127.0.0.1:4190/api/health)" = 200
+            node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-full-health-$RUN_ID
+            rm -f /tmp/voice-full-health-$RUN_ID
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:4186/)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
+            test "$(curl -sS --max-time 10 -o /tmp/voice-public-health-$RUN_ID -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-public-health-$RUN_ID
+            rm -f /tmp/voice-public-health-$RUN_ID
+            docker inspect voiceflow-local-stt --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' | grep -q '^running unless-stopped$'
+            grep -A3 -F 'location ^~ /api/' /etc/nginx/sites-enabled/voice.star45.net | grep -qF 'proxy_pass http://127.0.0.1:4190;'
+            test "$(systemctl is-enabled star45-voice-full-core-port-guard.service)" = enabled
+            test "$(systemctl is-active star45-voice-full-core-port-guard.service)" = active
+            iptables -C INPUT ! -i lo -p tcp --dport 4190 -m comment --comment STAR45-voice-full-core-4190 -j REJECT
+            ip6tables -C INPUT ! -i lo -p tcp --dport 4190 -m comment --comment STAR45-voice-full-core-4190 -j REJECT
+            test "$(sha256sum /opt/star45/voiceflow-runtime-public/app.js | awk '{print $1}')" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
+            USERS=$(node -e "const a=require(process.argv[1]);process.stdout.write(String(a.length))" "$DATA/users.json")
+            SESSIONS=$(node -e "const a=require(process.argv[1]);process.stdout.write(String(a.length))" "$DATA/sessions.json")
+            test "$USERS" -ge 99
+            test "$SESSIONS" -ge 177
+            ! grep -qF "__STAR45_E2E_$RUN_ID__" "$DATA/meetings.json"
+            nginx -t
+            echo 'PM2_FULL_CORE=PERSISTED'
+            echo 'LOCAL_WHISPER=PERSISTED'
+            echo 'API_ROUTE_4190=PERSISTED'
+            echo "IDENTITY_DATA=PRESERVED USERS=$USERS SESSIONS=$SESSIONS"
+            echo 'OLD_CORE_AND_DO=HEALTHY'
+            echo 'ROLLBACK_BACKUP=PASS'
+            echo 'PERSISTENCE_CONFIRMATION=PASS'
+
+      - name: Roll back full-core cutover if any verification fails
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 8m
           script_stop: false
           script: |
-            echo '=== CAPACITY ==='
-            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
-            uptime
-            free -m
-            df -h /
-
-            echo '=== NGINX_VOICE_FILES ==='
-            find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 2 -type f -o -type l 2>/dev/null | while read -r f; do
-              if grep -qE 'server_name[[:space:]]+voice\.star45\.net' "$f" 2>/dev/null; then
-                echo "FILE=$f REAL=$(readlink -f "$f")"
-                grep -nE 'server_name|location|proxy_pass|root |return 308|return 410' "$f" | head -120
-              fi
-            done
-            echo "VOICE_SERVER_FILE_COUNT=$(grep -RIlE 'server_name[[:space:]]+voice\.star45\.net' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | wc -l | tr -d ' ')"
-            nginx -t 2>&1
-
-            echo '=== PM2_AND_PORTS ==='
-            PM2_HOME=/root/.pm2 pm2 list || true
-            PM2_HOME=/root/.pm2 pm2 describe voice 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
-            PM2_HOME=/root/.pm2 pm2 describe voice-core-full 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
-            ss -ltnp | grep -E ':(3005|3006|4186|4190)([[:space:]]|$)' || true
-            test -f /root/.pm2/dump.pm2 && sha256sum /root/.pm2/dump.pm2 || true
-
-            echo '=== LOCAL_STT ==='
-            docker inspect voiceflow-local-stt --format 'STATE={{.State.Status}} RESTARTS={{.RestartCount}} POLICY={{.HostConfig.RestartPolicy.Name}} IMAGE={{.Image}} NETWORK={{.HostConfig.NetworkMode}}' || true
-            echo "LOCAL_STT_ROOT=$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:4186/ || true)"
-
-            echo '=== PRODUCTION_DATA ==='
-            DATA=/opt/star45/voiceflow-data
-            stat -c 'PATH=%n OWNER=%U:%G MODE=%a SIZE=%s' "$DATA" "$DATA/settings.json" 2>/dev/null || true
-            du -sh "$DATA" 2>/dev/null || true
-            node -e "const fs=require('fs');const d=process.argv[1],out={};for(const n of ['users','sessions','meetings','captions','events','results','tasks','consents']){try{const x=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8'));out[n]=Array.isArray(x)?x.length:'object'}catch(e){out[n]='error:'+e.code}}console.log(JSON.stringify(out))" "$DATA"
-            find "$DATA" -maxdepth 1 -type f -printf '%f %s bytes %TY-%Tm-%Td %TH:%TM:%TS\n' | sort
-
-            echo '=== CURRENT_PUBLIC ==='
-            curl -sS --max-time 10 https://voice.star45.net/api/health
-            echo
-            echo "ROOT=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/)"
-            echo "DO=$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)"
-            echo 'PREFLIGHT_COMPLETE=YES'
+            set -u
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            RUN_ID='${{ github.run_id }}'
+            BACKUP=/opt/star45/quarantine/voice-full-core-cutover-$RUN_ID
+            SCRIPT=/tmp/rollback-full-voice-core-$RUN_ID.sh
+            trap 'rm -f "$SCRIPT"' EXIT
+            if [ -d "$BACKUP" ]; then
+              git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d || exit 1
+              git -C "$ROOT" -c safe.directory="$ROOT" show 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d:ops/cutover-full-voice-core.sh > "$SCRIPT" || exit 1
+              chmod 700 "$SCRIPT"
+              RUN_KEY="$RUN_ID" bash "$SCRIPT" rollback
+            else
+              echo 'ROLLBACK_NOT_REQUIRED_NO_BACKUP'
+            fi
