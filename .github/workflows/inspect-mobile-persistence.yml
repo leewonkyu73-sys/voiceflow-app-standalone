@@ -1,4 +1,4 @@
-name: Trace periodic Voice source reversion
+name: Inspect legacy Voice cron scripts before isolation
 
 on:
   push:
@@ -11,64 +11,53 @@ permissions:
   contents: read
 
 jobs:
-  trace:
+  inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
-      - name: Inspect timers, services and file timestamps without changes
+      - name: Inspect targeted cron scripts without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 7m
+          command_timeout: 5m
           script_stop: false
           script: |
             set -u
-            ROOT=/opt/star45/voiceflow-smart-workspace
-            RUNTIME=/opt/star45/voiceflow-runtime-public
             echo '=== TIME_HEALTH ==='
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
-            uptime
             curl -sS --max-time 8 https://voice.star45.net/api/health || true
             echo
-            echo '=== FILE_STATE ==='
-            for f in "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$ROOT/public/index.html" "$ROOT/public/sw.js" "$RUNTIME/app.js" "$RUNTIME/index.html" "$RUNTIME/sw.js"; do
+            echo '=== ROOT_CRONTAB ==='
+            crontab -l 2>/dev/null || true
+            echo '=== SYSTEM_CRONTAB ==='
+            sed -n '1,220p' /etc/crontab 2>/dev/null || true
+            echo '=== TARGET_SCRIPTS ==='
+            for f in /usr/local/bin/voiceflow-auto-deploy.sh /opt/voiceflow-proxy/fix.sh; do
+              echo "FILE=$f"
               if [ -f "$f" ]; then
-                stat -c 'FILE=%n MTIME=%y SIZE=%s INODE=%i' "$f"
+                stat -c 'MODE=%a OWNER=%U:%G MTIME=%y SIZE=%s SHA=' "$f"
                 sha256sum "$f"
-                echo "MOBILE_GATE=$(grep -Foc 'audio_below_speech_floor' "$f" 2>/dev/null || true) ANDROID_FIX=$(grep -Foc 'if(mobileSpeech&&!mobileBrowserSpeech)' "$f" 2>/dev/null || true)"
+                sed -n '1,260p' "$f"
+              else
+                echo 'MISSING'
               fi
             done
-            echo '=== GIT_STATE ==='
-            git -C "$ROOT" -c safe.directory="$ROOT" rev-parse HEAD 2>/dev/null || true
-            git -C "$ROOT" -c safe.directory="$ROOT" status --short | head -120 || true
-            git -C "$ROOT" -c safe.directory="$ROOT" reflog --date=iso -20 2>/dev/null || true
-            echo '=== SYSTEMD_TIMERS ==='
-            systemctl list-timers --all --no-pager 2>/dev/null | head -120 || true
-            echo '=== RELEVANT_RUNNING_SERVICES ==='
-            systemctl list-units --type=service --state=running --no-pager 2>/dev/null | grep -Ei 'star45|voice|deploy|runner|watch|sync|git|webhook|agent' || true
-            echo '=== RELEVANT_UNIT_FILES ==='
-            grep -RIlE '/opt/star45/voiceflow-smart-workspace|git (pull|reset|checkout|restore)|voiceflow-runtime-public' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -100 || true
-            for f in $(grep -RIlE '/opt/star45/voiceflow-smart-workspace|git (pull|reset|checkout|restore)|voiceflow-runtime-public' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -40); do
-              echo "UNIT_FILE=$f"
-              sed -n '1,220p' "$f"
+            echo '=== AGENT_UNITS ==='
+            for f in /etc/systemd/system/star45-agent.service /etc/systemd/system/star45-agent.timer; do
+              echo "FILE=$f"
+              [ -f "$f" ] && sed -n '1,220p' "$f" || echo MISSING
             done
-            echo '=== CRON ==='
-            crontab -l 2>/dev/null || true
-            sed -n '1,200p' /etc/crontab 2>/dev/null || true
-            grep -RInE 'voiceflow|/opt/star45|git (pull|reset|checkout|restore)|deploy' /etc/cron.d /etc/cron.hourly /etc/cron.daily 2>/dev/null | head -160 || true
-            echo '=== PROCESSES ==='
-            ps -eo pid,ppid,lstart,etimes,cmd --sort=pid | grep -Ei 'actions-runner|Runner.Listener|Runner.Worker|voiceflow|deployment|watch|sync|git (pull|reset|checkout|restore)|webhook' | grep -v grep | head -200 || true
-            echo '=== DOCKER ==='
-            docker ps --format 'NAME={{.Names}} IMAGE={{.Image}} STATUS={{.Status}}' | grep -Ei 'voice|deploy|watch|sync|webhook|NAME=' || true
-            for c in $(docker ps --format '{{.Names}}' | grep -Ei 'voice|deploy|watch|sync|webhook' | head -30); do
-              echo "CONTAINER=$c"
-              docker inspect "$c" --format '{{range .Mounts}}MOUNT={{.Source}} -> {{.Destination}} RW={{.RW}}{{println}}{{end}}' 2>/dev/null || true
+            echo '=== PROXY_STATE ==='
+            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}} PORTS={{.Ports}}' | grep -E 'voiceflow-proxy|NAME=' || true
+            docker inspect voiceflow-proxy --format '{{json .HostConfig.RestartPolicy}} {{json .NetworkSettings.Networks}}' 2>/dev/null || true
+            echo '=== RECENT_SCRIPT_REFERENCES ==='
+            grep -RInF '/usr/local/bin/voiceflow-auto-deploy.sh' /etc /opt/star45 2>/dev/null | head -100 || true
+            grep -RInF '/opt/voiceflow-proxy/fix.sh' /etc /opt/star45 2>/dev/null | head -100 || true
+            echo '=== CURRENT_FILE_MARKERS ==='
+            for f in /opt/star45/voiceflow-smart-workspace/server-v2.mjs /opt/star45/voiceflow-smart-workspace/public/app.js /opt/star45/voiceflow-runtime-public/app.js; do
+              echo "FILE=$f SHA=$(sha256sum "$f" | awk '{print $1}') GATE=$(grep -Foc 'audio_below_speech_floor' "$f" 2>/dev/null || true) ANDROID=$(grep -Foc 'if(mobileSpeech&&!mobileBrowserSpeech)' "$f" 2>/dev/null || true)"
             done
-            echo '=== RECENT_JOURNAL ==='
-            journalctl --since '2026-09-04 19:15:00 UTC' --no-pager 2>/dev/null | grep -Ei 'voiceflow|git|deploy|runner|checkout|reset|restore|sync' | tail -240 || true
-            echo '=== RUNNER_LOG_TAILS ==='
-            find /opt/star45 -path '*/_diag/*.log' -type f -mmin -30 -print 2>/dev/null | tail -20 | while read -r f; do echo "LOG=$f"; tail -n 80 "$f"; done
-            echo 'TRACE_COMPLETE=YES'
+            echo 'INSPECTION_COMPLETE=YES'
