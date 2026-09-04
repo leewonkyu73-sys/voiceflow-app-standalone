@@ -1,0 +1,77 @@
+name: Inspect Voice direct-port guard options
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/inspect-voice-port-guard.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect firewall and process binding without changes
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script_stop: false
+          script: |
+            echo '=== FIREWALL_TOOLS ==='
+            command -v ufw || true
+            command -v nft || true
+            command -v iptables || true
+            systemctl is-enabled netfilter-persistent 2>/dev/null || true
+            systemctl is-active netfilter-persistent 2>/dev/null || true
+            dpkg-query -W -f='${Status} ${Package}\n' ufw iptables-persistent netfilter-persistent 2>/dev/null || true
+
+            echo '=== UFW_STATUS ==='
+            ufw status verbose 2>/dev/null || true
+
+            echo '=== IPTABLES_INPUT ==='
+            iptables -S INPUT 2>/dev/null || true
+            ip6tables -S INPUT 2>/dev/null || true
+
+            echo '=== NFT_RELEVANT ==='
+            nft list ruleset 2>/dev/null | grep -E 'hook input|dport (22|80|443|3005|3006|4173)|policy' | head -100 || true
+
+            echo '=== LISTENERS ==='
+            ss -ltnp | grep -E ':(22|80|443|3005|3006|4173)([[:space:]]|$)' || true
+
+            echo '=== PM2_TARGETS ==='
+            pm2 describe voice 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
+            pm2 describe do 2>/dev/null | grep -E 'status|script path|exec cwd|restarts|uptime' || true
+            echo "VOICE_PID=$(pm2 pid voice 2>/dev/null | head -1 || true)"
+            echo "DO_PID=$(pm2 pid do 2>/dev/null | head -1 || true)"
+
+            echo '=== BINDING_SOURCE ==='
+            for f in /opt/star45/voiceflow-smart-workspace/server.mjs /opt/star45/do-app/server.mjs /opt/star45/voiceflow-app-standalone/server.mjs; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f"
+                grep -nE 'server\.listen|process\.env\.(HOST|PORT)' "$f" | tail -10 || true
+              fi
+            done
+
+            echo '=== REPOSITORY_STATE ==='
+            for d in /opt/star45/voiceflow-smart-workspace /opt/star45/do-app /opt/star45/voiceflow-app-standalone; do
+              if [ -d "$d" ]; then
+                echo "DIR=$d"
+                git -C "$d" -c safe.directory="$d" rev-parse HEAD 2>/dev/null || true
+                git -C "$d" -c safe.directory="$d" remote get-url origin 2>/dev/null || true
+                git -C "$d" -c safe.directory="$d" status --short 2>/dev/null | head -30 || true
+              fi
+            done
+
+            echo '=== INTERNAL_HEALTH ==='
+            for port in 3005 3006; do
+              code=$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/health" || true)
+              echo "LOOPBACK_PORT=$port HEALTH_CODE=$code"
+            done
+            echo '=== INSPECTION_COMPLETE ==='
