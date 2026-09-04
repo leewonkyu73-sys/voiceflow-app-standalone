@@ -1,4 +1,4 @@
-name: Cut over Voice API to verified full core v2
+name: Cut over Voice API to verified full core v3
 
 on:
   push:
@@ -86,14 +86,14 @@ jobs:
           grep -qF 'data-translation-input' "$APP"
           grep -qF '/transcribe' "$APP"
           grep -qF "'x-voice-client':'v4-mobile'" "$APP"
-          node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" "$HEALTH"
+          node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" "$HEALTH"
 
           MEETINGS_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o "$MEETINGS" -w '%{http_code}' "$BASE/api/v1/meetings")
           test "$MEETINGS_CODE" = 200
-          MID=$(node -e "const d=require(process.argv[1]),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" "$MEETINGS")
+          MID=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" "$MEETINGS")
           CONTRACT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -X POST "$BASE/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-target: en-US' --data-binary 'tiny' -o "$CONTRACT" -w '%{http_code}')
           test "$CONTRACT_CODE" = 400
-          node -e "const d=require(process.argv[1]);if(d.error!=='audio_empty')process.exit(1)" "$CONTRACT"
+          node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(d.error!=='audio_empty')process.exit(1)" "$CONTRACT"
 
           for port in 3005 3006 4186 4190; do
             code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
@@ -128,28 +128,32 @@ jobs:
             test -d "$BACKUP"
             test -s "$BACKUP/voiceflow-data.tgz"
             test -s "$BACKUP/nginx.conf"
+            echo 'BACKUP_FILES=PASS'
             PM2_HOME="$PM2_HOME" pm2 describe voice-core-full | grep -q 'online'
             PM2_HOME="$PM2_HOME" pm2 describe voice | grep -q 'online'
             PM2_HOME="$PM2_HOME" pm2 describe do | grep -q 'online'
             grep -q 'voice-core-full' "$PM2_HOME/dump.pm2"
+            echo 'PM2_PERSISTENCE=PASS'
             test "$(curl -sS --max-time 8 -o /tmp/voice-full-health-$RUN_ID -w '%{http_code}' http://127.0.0.1:4190/api/health)" = 200
-            node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-full-health-$RUN_ID
+            node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-full-health-$RUN_ID
             rm -f /tmp/voice-full-health-$RUN_ID
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:4186/)" = 200
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
             test "$(curl -sS --max-time 10 -o /tmp/voice-public-health-$RUN_ID -w '%{http_code}' https://voice.star45.net/api/health)" = 200
-            node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-public-health-$RUN_ID
+            node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/voice-public-health-$RUN_ID
             rm -f /tmp/voice-public-health-$RUN_ID
+            echo 'RUNTIME_HEALTH=PASS'
             docker inspect voiceflow-local-stt --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' | grep -q '^running unless-stopped$'
             grep -A3 -F 'location ^~ /api/' /etc/nginx/sites-enabled/voice.star45.net | grep -qF 'proxy_pass http://127.0.0.1:4190;'
             test "$(systemctl is-enabled star45-voice-full-core-port-guard.service)" = enabled
             test "$(systemctl is-active star45-voice-full-core-port-guard.service)" = active
             iptables -C INPUT ! -i lo -p tcp --dport 4190 -m comment --comment STAR45-voice-full-core-4190 -j REJECT
             ip6tables -C INPUT ! -i lo -p tcp --dport 4190 -m comment --comment STAR45-voice-full-core-4190 -j REJECT
+            echo 'ROUTE_AND_GUARD=PASS'
             test "$(sha256sum /opt/star45/voiceflow-runtime-public/app.js | awk '{print $1}')" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
-            USERS=$(node -e "const a=require(process.argv[1]);process.stdout.write(String(a.length))" "$DATA/users.json")
-            SESSIONS=$(node -e "const a=require(process.argv[1]);process.stdout.write(String(a.length))" "$DATA/sessions.json")
+            USERS=$(node -e "const a=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(a.length))" "$DATA/users.json")
+            SESSIONS=$(node -e "const a=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(String(a.length))" "$DATA/sessions.json")
             test "$USERS" -ge 99
             test "$SESSIONS" -ge 177
             ! grep -qF "__STAR45_E2E_${RUN_ID}__" "$DATA/meetings.json"
