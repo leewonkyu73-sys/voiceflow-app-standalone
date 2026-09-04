@@ -1,4 +1,4 @@
-name: Cut over Voice API to verified full core
+name: Cut over Voice API to verified full core v2
 
 on:
   push:
@@ -35,6 +35,8 @@ jobs:
             trap 'rm -f "$SCRIPT"' EXIT
             git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d
             git -C "$ROOT" -c safe.directory="$ROOT" show 6f56ed4f3c82bd8683d0520145e89af67e8e1a7d:ops/cutover-full-voice-core.sh > "$SCRIPT"
+            sed -i 's/__STAR45_E2E_\$RUN_KEY__/__STAR45_E2E_${RUN_KEY}__/g' "$SCRIPT"
+            grep -qF '__STAR45_E2E_${RUN_KEY}__' "$SCRIPT"
             chmod 700 "$SCRIPT"
             RUN_KEY=${{ github.run_id }} bash "$SCRIPT" apply
 
@@ -84,7 +86,7 @@ jobs:
           grep -qF 'data-translation-input' "$APP"
           grep -qF '/transcribe' "$APP"
           grep -qF "'x-voice-client':'v4-mobile'" "$APP"
-          node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1);console.log('PUBLIC_HEALTH='+JSON.stringify({service:d.service,version:d.version}))" "$HEALTH"
+          node -e "const d=require(process.argv[1]);if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" "$HEALTH"
 
           MEETINGS_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o "$MEETINGS" -w '%{http_code}' "$BASE/api/v1/meetings")
           test "$MEETINGS_CODE" = 200
@@ -118,7 +120,6 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
-            ROOT=/opt/star45/voiceflow-smart-workspace
             DATA=/opt/star45/voiceflow-data
             RUN_ID='${{ github.run_id }}'
             BACKUP=/opt/star45/quarantine/voice-full-core-cutover-$RUN_ID
@@ -151,7 +152,7 @@ jobs:
             SESSIONS=$(node -e "const a=require(process.argv[1]);process.stdout.write(String(a.length))" "$DATA/sessions.json")
             test "$USERS" -ge 99
             test "$SESSIONS" -ge 177
-            ! grep -qF "__STAR45_E2E_$RUN_ID__" "$DATA/meetings.json"
+            ! grep -qF "__STAR45_E2E_${RUN_ID}__" "$DATA/meetings.json"
             nginx -t
             echo 'PM2_FULL_CORE=PERSISTED'
             echo 'LOCAL_WHISPER=PERSISTED'
