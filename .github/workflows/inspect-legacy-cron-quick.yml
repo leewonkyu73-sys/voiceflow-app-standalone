@@ -1,4 +1,4 @@
-name: Quick inspect legacy Voice cron scripts
+name: Verify final Voice runtime and stale PM2 processes
 
 on:
   push:
@@ -13,32 +13,89 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
-      - name: Read only targeted scripts
+      - name: Inspect current runtime without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 3m
+          command_timeout: 5m
           script_stop: false
           script: |
-            echo '=== ROOT_CRONTAB ==='
-            crontab -l 2>/dev/null || true
-            echo '=== SYSTEM_CRONTAB_VOICE ==='
-            grep -nF 'voiceflow-auto-deploy.sh' /etc/crontab 2>/dev/null || true
-            echo '=== AUTO_DEPLOY_SCRIPT ==='
-            stat -c 'FILE=%n MODE=%a OWNER=%U:%G MTIME=%y SIZE=%s' /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
-            sha256sum /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
-            sed -n '1,240p' /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
-            echo '=== PROXY_FIX_SCRIPT ==='
-            stat -c 'FILE=%n MODE=%a OWNER=%U:%G MTIME=%y SIZE=%s' /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
-            sha256sum /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
-            sed -n '1,240p' /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
-            echo '=== CURRENT_HEALTH_AND_EDGE ==='
-            curl -sS --max-time 8 https://voice.star45.net/api/health || true
+            set -u
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            RUNTIME=/opt/star45/voiceflow-runtime-public
+            echo '=== TIME_AND_HEALTH ==='
+            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            uptime
+            free -m
+            curl -sS --max-time 10 https://voice.star45.net/api/health || true
             echo
-            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}' | grep -E 'voiceflow-proxy|NAME=' || true
-            echo 'QUICK_INSPECTION_COMPLETE=YES'
+
+            echo '=== CRON_AND_PROXY_ISOLATION ==='
+            echo 'ROOT_CRON:'
+            crontab -l 2>/dev/null || true
+            echo 'SYSTEM_CRON_MATCHES:'
+            grep -nF '/usr/local/bin/voiceflow-auto-deploy.sh' /etc/crontab 2>/dev/null || true
+            echo 'AUTO_STUB:'
+            sed -n '1,20p' /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
+            echo 'PROXY_STUB:'
+            sed -n '1,20p' /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
+            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}} PORTS={{.Ports}}' | grep -E 'voiceflow-proxy|NAME=' || true
+
+            echo '=== NGINX_ROUTE ==='
+            grep -A10 -F 'location ^~ /api/' /etc/nginx/sites-enabled/voice.star45.net 2>/dev/null || true
+            nginx -t 2>&1 || true
+
+            echo '=== PM2_PROCESSES ==='
+            PM2_HOME=/root/.pm2 pm2 list || true
+            node - <<'NODE'
+const {execFileSync}=require('child_process');
+let list=[];
+try{list=JSON.parse(execFileSync('pm2',['jlist'],{env:{...process.env,PM2_HOME:'/root/.pm2'},encoding:'utf8'}))}catch(e){console.log('PM2_JLIST_ERROR='+e.message);process.exit(0)}
+const wanted=new Set(['voice','do','voice-core-full','voiceflow-core','voiceflow-standalone']);
+for(const p of list.filter(x=>wanted.has(x.name))){
+  const e=p.pm2_env||{};
+  console.log(JSON.stringify({name:p.name,pid:p.pid,status:e.status,restarts:e.restart_time,exec:e.pm_exec_path,cwd:e.pm_cwd,port:e.PORT||'',data_dir:e.DATA_DIR||'',created_at:e.created_at||0}));
+}
+NODE
+
+            echo '=== LISTENERS ==='
+            ss -ltnp | grep -E ':(80|443|3005|3006|4173|4174|4175|4176|4177|4178|4179|4180|4181|4182|4183|4184|4185|4186|4187|4188|4189|4190|4191)([[:space:]]|$)' || true
+
+            echo '=== DISK_AND_PUBLIC_MARKERS ==='
+            for f in "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$ROOT/public/index.html" "$ROOT/public/sw.js" "$RUNTIME/app.js" "$RUNTIME/index.html" "$RUNTIME/sw.js"; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f MTIME=$(stat -c '%y' "$f") SIZE=$(wc -c < "$f") SHA=$(sha256sum "$f" | awk '{print $1}') GATE=$(grep -Foc 'audio_below_speech_floor' "$f" 2>/dev/null || true) ANDROID=$(grep -Foc 'if(mobileSpeech&&!mobileBrowserSpeech)' "$f" 2>/dev/null || true) VERSION=$(grep -Foc '3.5.25' "$f" 2>/dev/null || true)"
+              fi
+            done
+            test -f "$ROOT/public/app.js" && cmp -s "$ROOT/public/app.js" "$RUNTIME/app.js" && echo 'SOURCE_RUNTIME_APP=MATCH' || echo 'SOURCE_RUNTIME_APP=DIFFER'
+            test -f "$ROOT/public/index.html" && cmp -s "$ROOT/public/index.html" "$RUNTIME/index.html" && echo 'SOURCE_RUNTIME_INDEX=MATCH' || echo 'SOURCE_RUNTIME_INDEX=DIFFER'
+            test -f "$ROOT/public/sw.js" && cmp -s "$ROOT/public/sw.js" "$RUNTIME/sw.js" && echo 'SOURCE_RUNTIME_SW=MATCH' || echo 'SOURCE_RUNTIME_SW=DIFFER'
+
+            echo '=== INTERNAL_HEALTHS ==='
+            for url in http://127.0.0.1:3005/api/health http://127.0.0.1:3006/api/health http://127.0.0.1:4186/ http://127.0.0.1:4190/api/health; do
+              code=$(curl -sS --max-time 8 -o /tmp/voice-final-probe -w '%{http_code}' "$url" || true)
+              body=$(head -c 250 /tmp/voice-final-probe 2>/dev/null | tr '\n' ' ' || true)
+              echo "URL=$url CODE=${code:-000} BODY=$body"
+            done
+            rm -f /tmp/voice-final-probe
+            echo 'FINAL_INSPECTION_COMPLETE=YES'
+
+      - name: Verify public endpoint independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=https://voice.star45.net
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/root -w '%{http_code}' "$BASE/?final=${{ github.run_id }}")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/app -w '%{http_code}' "$BASE/app.js?v=3.5.25-${{ github.run_id }}")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' "$BASE/api/health")" = 200
+          grep -qF 'app.js?v=3.5.25' /tmp/root
+          grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' /tmp/app
+          grep -qF 'blob.size>=mobileMinBytes' /tmp/app
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+          rm -f /tmp/root /tmp/app /tmp/health
+          echo 'INDEPENDENT_FINAL_HEALTH=PASS'
