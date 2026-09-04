@@ -1,0 +1,249 @@
+name: Isolate retired Voice UI and restore canonical screen
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/repair-voice-ui-isolation.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-ui-production-isolation
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Back up edge and isolate retired screen
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script_stop: true
+          script: |
+            set -eu
+            RUN_ID='${{ github.run_id }}'
+            LIVE=/opt/star45/voiceflow-runtime-public
+            SOURCE_PUBLIC=/opt/star45/voiceflow-smart-workspace/public
+            QUARANTINE=/opt/star45/quarantine/voice-ui-isolation-$RUN_ID
+            ENABLED=/etc/nginx/sites-enabled/voice.star45.net
+            NGINX_CONF=$(readlink -f "$ENABLED")
+            STAGE="$NGINX_CONF.next-$RUN_ID"
+            APPLIED=0
+
+            rollback_on_error() {
+              code=$?
+              trap - EXIT INT TERM
+              if [ "$code" -ne 0 ] && [ "$APPLIED" -eq 1 ] && [ -f "$QUARANTINE/nginx.conf" ]; then
+                echo 'Repair failed; restoring previous Nginx route.'
+                cp -a "$QUARANTINE/nginx.conf" "$NGINX_CONF"
+                nginx -t && systemctl reload nginx || true
+              fi
+              rm -f "$STAGE"
+              exit "$code"
+            }
+            trap rollback_on_error EXIT INT TERM
+
+            echo '=== 1. PRECHECK CANONICAL UI ==='
+            test -n "$NGINX_CONF"
+            test -f "$NGINX_CONF"
+            test -r "$LIVE/index.html"
+            test -r "$LIVE/app.js"
+            test -r "$LIVE/sw.js"
+            test -r "$LIVE/style.css"
+            node --check "$LIVE/app.js"
+            grep -qF 'app.js?v=3.5.24' "$LIVE/index.html"
+            grep -qF "const APP_VERSION='3.5.24'" "$LIVE/app.js"
+            grep -qF 'liveComposer' "$LIVE/app.js"
+            grep -qF 'data-translation-input' "$LIVE/app.js"
+            LIVE_BYTES=$(wc -c < "$LIVE/app.js")
+            test "$LIVE_BYTES" -gt 100000
+            LIVE_HASH=$(sha256sum "$LIVE/app.js" | awk '{print $1}')
+            SOURCE_BYTES=$(wc -c < "$SOURCE_PUBLIC/app.js")
+            SOURCE_HASH=$(sha256sum "$SOURCE_PUBLIC/app.js" | awk '{print $1}')
+            echo "CANONICAL_BYTES=$LIVE_BYTES CANONICAL_HASH=$LIVE_HASH"
+            echo "RETIRED_BYTES=$SOURCE_BYTES RETIRED_HASH=$SOURCE_HASH"
+            test "$LIVE_HASH" != "$SOURCE_HASH"
+            BEFORE_PID=$(pm2 pid voice | head -1)
+            test -n "$BEFORE_PID"
+            curl -fsSL --max-time 8 http://127.0.0.1:3005/api/health >/dev/null
+
+            echo '=== 2. QUARANTINE RETIRED UI AND BACK UP EDGE ==='
+            mkdir -p "$QUARANTINE"
+            cp -a "$NGINX_CONF" "$QUARANTINE/nginx.conf"
+            printf '%s\n' "$NGINX_CONF" > "$QUARANTINE/nginx-path"
+            cp -a "$SOURCE_PUBLIC" "$QUARANTINE/retired-source-public"
+            printf 'retired_source=%s\ncanonical_runtime=%s\nretired_hash=%s\ncanonical_hash=%s\n' "$SOURCE_PUBLIC" "$LIVE" "$SOURCE_HASH" "$LIVE_HASH" > "$QUARANTINE/README.txt"
+
+            echo '=== 3. BUILD GUARDED NGINX ROUTE ==='
+            python3 - "$NGINX_CONF" "$STAGE" <<'PY'
+            import pathlib
+            import re
+            import sys
+
+            src = pathlib.Path(sys.argv[1])
+            dst = pathlib.Path(sys.argv[2])
+            text = src.read_text(encoding='utf-8')
+            marker = '# voice-ui-canonical-runtime-v1'
+            if marker in text:
+                dst.write_text(text, encoding='utf-8')
+                raise SystemExit(0)
+
+            pattern = re.compile(r'(?m)^\s*location / \{\s*proxy_pass\s+http://127\.0\.0\.1:3005;.*\}\s*$')
+            replacement = r'''
+                # voice-ui-canonical-runtime-v1
+                location ^~ /api/ {
+                    proxy_pass http://127.0.0.1:3005;
+                    proxy_http_version 1.1;
+                    proxy_set_header Host $host;
+                    proxy_set_header Upgrade $http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                }
+
+                location ~ ^/(privacy|terms|account-delete)$ {
+                    proxy_pass http://127.0.0.1:3005;
+                    proxy_http_version 1.1;
+                    proxy_set_header Host $host;
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                }
+
+                location = /v4/mobile { return 308 /; }
+                location ^~ /v4/mobile/ { return 308 /; }
+                location ^~ /frontend-v4/ { return 410; }
+
+                location = /index.html {
+                    root /opt/star45/voiceflow-runtime-public;
+                    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+                    try_files $uri =404;
+                }
+
+                location = /app.js {
+                    root /opt/star45/voiceflow-runtime-public;
+                    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+                    try_files $uri =404;
+                }
+
+                location = /sw.js {
+                    root /opt/star45/voiceflow-runtime-public;
+                    add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+                    try_files $uri =404;
+                }
+
+                location / {
+                    root /opt/star45/voiceflow-runtime-public;
+                    try_files $uri $uri/ /index.html;
+                }
+            '''
+            updated, count = pattern.subn(replacement.rstrip(), text, count=1)
+            if count != 1:
+                raise SystemExit(f'expected one legacy root proxy block, found {count}')
+            dst.write_text(updated, encoding='utf-8')
+            PY
+
+            grep -qF '# voice-ui-canonical-runtime-v1' "$STAGE"
+            grep -qF 'root /opt/star45/voiceflow-runtime-public;' "$STAGE"
+            grep -qF 'location = /v4/mobile { return 308 /; }' "$STAGE"
+
+            echo '=== 4. ATOMIC EDGE SWITCH ==='
+            install -m 0644 "$STAGE" "$NGINX_CONF.new-$RUN_ID"
+            mv -f "$NGINX_CONF.new-$RUN_ID" "$NGINX_CONF"
+            APPLIED=1
+            nginx -t
+            systemctl reload nginx
+            sleep 2
+
+            echo '=== 5. LOCAL END-TO-END VERIFICATION ==='
+            LOCAL_INDEX=/tmp/voice-index-$RUN_ID
+            LOCAL_APP=/tmp/voice-app-$RUN_ID
+            curl -k -fsSL --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -H 'Cache-Control: no-cache' "https://voice.star45.net/?ts=$RUN_ID" -o "$LOCAL_INDEX"
+            curl -k -fsSL --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -H 'Cache-Control: no-cache' "https://voice.star45.net/app.js?ts=$RUN_ID" -o "$LOCAL_APP"
+            grep -qF 'app.js?v=3.5.24' "$LOCAL_INDEX"
+            grep -qF 'liveComposer' "$LOCAL_APP"
+            grep -qF 'data-translation-input' "$LOCAL_APP"
+            SERVED_HASH=$(sha256sum "$LOCAL_APP" | awk '{print $1}')
+            test "$SERVED_HASH" = "$LIVE_HASH"
+            APP_CODE=$(curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://voice.star45.net/app.js)
+            HEALTH_CODE=$(curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /tmp/voice-health-$RUN_ID -w '%{http_code}' https://voice.star45.net/api/health)
+            RETIRED_CODE=$(curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://voice.star45.net/v4/mobile)
+            RETIRED_LOCATION=$(curl -k -sSI --max-time 10 --resolve voice.star45.net:443:127.0.0.1 https://voice.star45.net/v4/mobile | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}' | tail -1)
+            LEGAL_CODE=$(curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://voice.star45.net/privacy)
+            test "$APP_CODE" = 200
+            test "$HEALTH_CODE" = 200
+            test "$RETIRED_CODE" = 308
+            test "$RETIRED_LOCATION" = '/'
+            test "$LEGAL_CODE" = 200
+            AFTER_PID=$(pm2 pid voice | head -1)
+            test "$AFTER_PID" = "$BEFORE_PID"
+            nginx -t
+            rm -f "$LOCAL_INDEX" "$LOCAL_APP" /tmp/voice-health-$RUN_ID "$STAGE"
+            printf 'status=PASS\nserved_hash=%s\nvoice_pid=%s\nretired_route=/v4/mobile -> /\n' "$SERVED_HASH" "$AFTER_PID" >> "$QUARANTINE/README.txt"
+            APPLIED=0
+            trap - EXIT INT TERM
+            echo 'CANONICAL_UI_LOCAL=PASS'
+            echo 'RETIRED_UI_QUARANTINED=PASS'
+            echo 'API_HEALTH=PASS'
+            echo 'VOICE_PROCESS_RESTART=NONE'
+            echo "ROLLBACK=$QUARANTINE/nginx.conf"
+
+      - name: Verify canonical UI from independent network
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID='${{ github.run_id }}'
+          INDEX=/tmp/voice-index-$RUN_ID
+          APP=/tmp/voice-app-$RUN_ID
+          ROOT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "https://voice.star45.net/?ts=$RUN_ID")
+          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "https://voice.star45.net/app.js?ts=$RUN_ID")
+          HEALTH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/voice-health-$RUN_ID -w '%{http_code}' https://voice.star45.net/api/health)
+          RETIRED_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o /dev/null -w '%{http_code}' https://voice.star45.net/v4/mobile)
+          RETIRED_LOCATION=$(curl -sSI --connect-timeout 10 --max-time 20 https://voice.star45.net/v4/mobile | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}' | tail -1)
+          APP_BYTES=$(wc -c < "$APP")
+          test "$ROOT_CODE" = 200
+          test "$APP_CODE" = 200
+          test "$HEALTH_CODE" = 200
+          test "$RETIRED_CODE" = 308
+          test "$RETIRED_LOCATION" = '/'
+          test "$APP_BYTES" -gt 100000
+          grep -qF 'app.js?v=3.5.24' "$INDEX"
+          grep -qF 'liveComposer' "$APP"
+          grep -qF 'data-translation-input' "$APP"
+          rm -f "$INDEX" "$APP" /tmp/voice-health-$RUN_ID
+          echo "EXTERNAL_ROOT=$ROOT_CODE"
+          echo "EXTERNAL_APP=$APP_CODE BYTES=$APP_BYTES"
+          echo "EXTERNAL_API_HEALTH=$HEALTH_CODE"
+          echo "EXTERNAL_RETIRED_ROUTE=$RETIRED_CODE LOCATION=$RETIRED_LOCATION"
+          echo 'EXTERNAL_VERIFICATION=PASS'
+
+      - name: Roll back edge if independent verification fails
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script_stop: false
+          script: |
+            RUN_ID='${{ github.run_id }}'
+            BACKUP=/opt/star45/quarantine/voice-ui-isolation-$RUN_ID
+            if [ -f "$BACKUP/nginx.conf" ] && [ -f "$BACKUP/nginx-path" ]; then
+              NGINX_CONF=$(cat "$BACKUP/nginx-path")
+              cp -a "$BACKUP/nginx.conf" "$NGINX_CONF"
+              nginx -t && systemctl reload nginx
+              echo 'ROLLBACK_COMPLETED=YES'
+            else
+              echo 'ROLLBACK_BACKUP_NOT_FOUND'
+            fi
