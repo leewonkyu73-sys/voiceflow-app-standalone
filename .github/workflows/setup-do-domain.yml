@@ -1,0 +1,44 @@
+name: Setup do.ab80.net Domain
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-domain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create Nginx config for do.ab80.net
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            echo "=== 1. Nginx 설정 생성 ==="
+            cat > /etc/nginx/sites-available/do.ab80.net <<'NGINX'
+            server {
+                listen 80;
+                server_name do.ab80.net;
+                location / {
+                    proxy_pass http://127.0.0.1:3006;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $http_upgrade;
+                    proxy_set_header Connection 'upgrade';
+                    proxy_set_header Host $host;
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                    proxy_cache_bypass $http_upgrade;
+                }
+            }
+            NGINX
+            
+            ln -sf /etc/nginx/sites-available/do.ab80.net /etc/nginx/sites-enabled/do.ab80.net
+            nginx -t && systemctl reload nginx
+            echo "=== 2. SSL 발급 ==="
+            certbot --nginx -d do.ab80.net --non-interactive --agree-tos -m admin@ab80.net || echo "Certbot 실패 - DNS 확인 필요"
+            systemctl reload nginx
+            echo "✅ do.ab80.net -> :3006 연결 완료"
+            curl -I http://do.ab80.net || true
+            curl -I https://do.ab80.net || true
