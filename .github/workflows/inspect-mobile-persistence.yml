@@ -1,0 +1,64 @@
+name: Inspect mobile voice disk and runtime persistence
+
+on:
+  push:
+    branches:
+      - ops/voice-stt-translation-diagnostic
+    paths:
+      - .github/workflows/inspect-mobile-persistence.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect production files and PM2 path without changes
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          script_stop: false
+          script: |
+            set -u
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            RUNTIME=/opt/star45/voiceflow-runtime-public
+            echo '=== HEALTH ==='
+            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            curl -sS --max-time 8 https://voice.star45.net/api/health || true
+            echo
+            echo '=== FILE_HASHES_AND_MARKERS ==='
+            for f in "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$RUNTIME/app.js" "$ROOT/public/index.html" "$RUNTIME/index.html" "$ROOT/public/sw.js" "$RUNTIME/sw.js"; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f SIZE=$(wc -c < "$f") SHA=$(sha256sum "$f" | awk '{print $1}')"
+                for marker in "audio_below_speech_floor" "if(mobileSpeech&&!mobileBrowserSpeech)" "blob.size>=mobileMinBytes" "app.js?v=3.5.25" "voiceflow-shell-v3525-mobile-voice-safe"; do
+                  echo "MARKER=$marker COUNT=$(grep -Foc "$marker" "$f" 2>/dev/null || true)"
+                done
+              fi
+            done
+            echo '=== PM2 ==='
+            PM2_HOME=/root/.pm2 pm2 describe voice-core-full 2>/dev/null || true
+            echo '=== WRAPPER ==='
+            for f in /opt/star45/runtime/voice-core-full/start.sh /root/.pm2/dump.pm2; do
+              if [ -f "$f" ]; then
+                echo "FILE=$f"
+                if [ "$f" = /root/.pm2/dump.pm2 ]; then
+                  grep -E 'voice-core-full|pm_exec_path|pm_cwd|PORT|DATA_DIR' "$f" | head -80 || true
+                else
+                  sed -n '1,160p' "$f"
+                fi
+              fi
+            done
+            echo '=== PROCESS_CMDLINE ==='
+            pid=$(PM2_HOME=/root/.pm2 pm2 pid voice-core-full 2>/dev/null || true)
+            echo "PID=$pid"
+            [ -n "$pid" ] && tr '\0' ' ' < "/proc/$pid/cmdline" && echo || true
+            [ -n "$pid" ] && readlink -f "/proc/$pid/cwd" || true
+            echo '=== WORKTREE_STATUS ==='
+            git -C "$ROOT" -c safe.directory="$ROOT" status --short | head -80 || true
+            echo 'INSPECTION_COMPLETE=YES'
