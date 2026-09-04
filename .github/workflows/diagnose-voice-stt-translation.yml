@@ -1,4 +1,4 @@
-name: Restore Voice core after runner child cleanup
+name: Apply mobile voice safety through independent SSH canary
 
 on:
   push:
@@ -11,106 +11,239 @@ permissions:
   contents: read
 
 concurrency:
-  group: voice-core-emergency-restore
+  group: voice-mobile-safety-independent
   cancel-in-progress: false
 
 jobs:
-  restore:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
-      - name: Restore previous Voice core through independent SSH
+      - name: Canary and deploy mobile voice safety on VPS
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 8m
+          command_timeout: 16m
           script_stop: true
           script: |
             set -euo pipefail
             ROOT=/opt/star45/voiceflow-smart-workspace
             RUNTIME=/opt/star45/voiceflow-runtime-public
-            FAILED_RUN=33910249191
-            BACKUP=/opt/star45/quarantine/voice-mobile-safety-$FAILED_RUN
-            CONF=/etc/nginx/sites-enabled/voice.star45.net
-            PM2_HOME=/root/.pm2
+            RUN_KEY='${{ github.run_id }}'
+            BACKUP=/opt/star45/quarantine/voice-mobile-safety-ssh-$RUN_KEY
+            STAGE=/opt/star45/runtime/voice-mobile-safety-stage-$RUN_KEY
+            DATA=/tmp/voice-mobile-safety-data-$RUN_KEY
+            PATCH=/tmp/patch-mobile-voice-safety-$RUN_KEY.mjs
+            LOG=/tmp/voice-mobile-safety-canary-$RUN_KEY.log
+            PIDFILE=/tmp/voice-mobile-safety-canary-$RUN_KEY.pid
+            AUDIO=/tmp/voice-mobile-safety-$RUN_KEY.webm
+            LOW=/tmp/voice-mobile-low-$RUN_KEY.webm
+            PORT=4191
+            INSTALLED=0
+            SUCCESS=0
 
-            echo '=== CURRENT_STATE ==='
+            cleanup() {
+              code=$?
+              if [ -f "$PIDFILE" ]; then
+                pid=$(cat "$PIDFILE" 2>/dev/null || true)
+                [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+                [ -z "$pid" ] || wait "$pid" 2>/dev/null || true
+              fi
+              iptables -D INPUT ! -i lo -p tcp --dport "$PORT" -m comment --comment STAR45-voice-mobile-canary -j REJECT 2>/dev/null || true
+              ip6tables -D INPUT ! -i lo -p tcp --dport "$PORT" -m comment --comment STAR45-voice-mobile-canary -j REJECT 2>/dev/null || true
+              if [ "$code" -ne 0 ]; then
+                echo '=== FAILURE_LOG ==='
+                tail -n 180 "$LOG" 2>/dev/null || true
+              fi
+              if [ "$code" -ne 0 ] && [ "$INSTALLED" -eq 1 ] && [ -d "$BACKUP" ]; then
+                echo '=== AUTOMATIC_ROLLBACK ==='
+                for f in app.js index.html sw.js; do
+                  install -m 644 "$BACKUP/runtime-$f" "$RUNTIME/$f"
+                  install -m 644 "$BACKUP/source-$f" "$ROOT/public/$f"
+                done
+                install -m 644 "$BACKUP/server-v2.mjs" "$ROOT/server-v2.mjs"
+                PM2_HOME=/root/.pm2 pm2 restart voice-core-full --update-env >/dev/null 2>&1 || true
+                PM2_HOME=/root/.pm2 pm2 save >/dev/null 2>&1 || true
+                echo 'AUTOMATIC_ROLLBACK=COMPLETE'
+              fi
+              rm -rf "$STAGE" "$DATA" "$PATCH" "$LOG" "$PIDFILE" "$AUDIO" "$LOW" /tmp/voice-mobile-*.json
+              exit "$code"
+            }
+            trap cleanup EXIT INT TERM
+
+            echo '=== 1. PRECHECK ==='
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
             uptime
-            PM2_HOME="$PM2_HOME" pm2 list || true
-            ss -ltnp | grep -E ':(80|443|3005|3006|4186|4190)([[:space:]]|$)' || true
-            curl -sS --max-time 5 http://127.0.0.1:4190/api/health || true
-            echo
+            free -m
+            df -h /
+            nginx -t
+            test "$(curl -sS --max-time 10 -o /tmp/voice-mobile-pre.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-pre.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            PM2_HOME=/root/.pm2 pm2 describe voice-core-full | grep -q 'online'
+            test "$(docker inspect --format '{{.State.Status}}' voiceflow-local-stt)" = running
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
 
-            echo '=== RESTORE_KNOWN_GOOD_FILES ==='
-            test -d "$BACKUP"
+            echo '=== 2. BACKUP ==='
+            mkdir -p "$BACKUP"
+            chmod 700 "$BACKUP"
             for f in app.js index.html sw.js; do
-              test -f "$BACKUP/runtime-$f"
-              test -f "$BACKUP/source-$f"
-              install -m 644 "$BACKUP/runtime-$f" "$RUNTIME/$f"
-              install -m 644 "$BACKUP/source-$f" "$ROOT/public/$f"
+              cp -a "$RUNTIME/$f" "$BACKUP/runtime-$f"
+              cp -a "$ROOT/public/$f" "$BACKUP/source-$f"
             done
-            test -f "$BACKUP/server-v2.mjs"
-            install -m 644 "$BACKUP/server-v2.mjs" "$ROOT/server-v2.mjs"
-            node --check "$ROOT/server-v2.mjs"
-            node --check "$RUNTIME/app.js"
+            cp -a "$ROOT/server-v2.mjs" "$BACKUP/server-v2.mjs"
+            cp -a /root/.pm2/dump.pm2 "$BACKUP/dump.pm2" 2>/dev/null || true
+            node -e "const fs=require('fs'),d='/opt/star45/voiceflow-data',o={};for(const n of ['users','sessions','meetings','captions'])o[n]=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8')).length;fs.writeFileSync(process.argv[1],JSON.stringify(o,null,2));console.log('DATA_BEFORE='+JSON.stringify(o))" "$BACKUP/counts-before.json"
+            sha256sum "$RUNTIME/app.js" "$RUNTIME/index.html" "$RUNTIME/sw.js" "$ROOT/server-v2.mjs" > "$BACKUP/hashes-before.txt"
 
-            echo '=== START_FULL_CORE_OUTSIDE_RUNNER_TRACKING ==='
-            if PM2_HOME="$PM2_HOME" pm2 describe voice-core-full >/dev/null 2>&1; then
-              PM2_HOME="$PM2_HOME" pm2 restart voice-core-full --update-env
-            else
-              test -x /opt/star45/runtime/voice-core-full/start.sh
-              PM2_HOME="$PM2_HOME" pm2 start /opt/star45/runtime/voice-core-full/start.sh --name voice-core-full
-            fi
+            echo '=== 3. PATCH_ISOLATED_STAGE ==='
+            mkdir -p "$STAGE/public" "$DATA"
+            cp -a "$RUNTIME/app.js" "$STAGE/public/app.js"
+            cp -a "$RUNTIME/index.html" "$STAGE/public/index.html"
+            cp -a "$RUNTIME/sw.js" "$STAGE/public/sw.js"
+            cp -a "$ROOT/server-v2.mjs" "$STAGE/server-v2.mjs"
+            ln -s "$ROOT/lib" "$STAGE/lib"
+            ln -s "$ROOT/frontend-v4" "$STAGE/frontend-v4"
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin f8c88cedc61a742c45732c553d2f2b3fa739f2cc
+            git -C "$ROOT" -c safe.directory="$ROOT" show f8c88cedc61a742c45732c553d2f2b3fa739f2cc:ops/patch-mobile-voice-safety-v3525.mjs > "$PATCH"
+            node "$PATCH" "$STAGE"
+            node --check "$STAGE/public/app.js"
+            node --check "$STAGE/server-v2.mjs"
+            grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' "$STAGE/public/app.js"
+            grep -qF 'r.interimResults=!mobileBrowserSpeech' "$STAGE/public/app.js"
+            grep -qF 'blob.size>=mobileMinBytes' "$STAGE/public/app.js"
+            grep -qF "reason:'audio_below_speech_floor'" "$STAGE/server-v2.mjs"
+            grep -qF 'app.js?v=3.5.25' "$STAGE/public/index.html"
+            grep -qF 'voiceflow-shell-v3525-mobile-voice-safe' "$STAGE/public/sw.js"
+            grep -qF 'chatText' "$STAGE/public/app.js"
+            grep -qF 'sendChat' "$STAGE/public/app.js"
+
+            echo '=== 4. PREPARE_REAL_AUDIO_AND_ISOLATED_DATA ==='
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin ae2fb5d9aee5904104718027336d84584aef6e41
+            git -C "$ROOT" -c safe.directory="$ROOT" show ae2fb5d9aee5904104718027336d84584aef6e41:ops/voice-stt-canary.webm.b64 | tr -d '\r\n' | base64 -d > "$AUDIO"
+            truncate -s 16000 "$AUDIO"
+            dd if=/dev/zero of="$LOW" bs=2000 count=1 status=none
+            for n in users sessions meetings captions events results tasks consents; do printf '[]\n' > "$DATA/$n.json"; done
+            cp -a /opt/star45/voiceflow-data/settings.json "$DATA/settings.json"
+            iptables -I INPUT ! -i lo -p tcp --dport "$PORT" -m comment --comment STAR45-voice-mobile-canary -j REJECT
+            ip6tables -I INPUT ! -i lo -p tcp --dport "$PORT" -m comment --comment STAR45-voice-mobile-canary -j REJECT
+
+            echo '=== 5. START_ISOLATED_CANARY ==='
+            set -a
+            . "$ROOT/.env"
+            set +a
+            export DATA_DIR="$DATA"
+            export INTEGRATION_DATA_DIR=/opt/star45/voiceflow-data
+            export LOCAL_STT_ENABLED=1
+            export LOCAL_STT_EXCLUSIVE=1
+            export LOCAL_STT_URL=http://127.0.0.1:4186/inference
+            export LOCAL_STT_MODEL=ggml-tiny
+            export PORT="$PORT"
+            nohup node "$ROOT/services/integration-env-launcher.mjs" "../../runtime/voice-mobile-safety-stage-$RUN_KEY/server-v2.mjs" > "$LOG" 2>&1 &
+            echo $! > "$PIDFILE"
             ready=0
-            for n in $(seq 1 40); do
-              if curl -fsSL --max-time 3 http://127.0.0.1:4190/api/health >/tmp/voice-restore-health.json 2>/dev/null; then ready=1; break; fi
+            for n in $(seq 1 35); do
+              if curl -fsSL --max-time 3 "http://127.0.0.1:$PORT/api/health" >/tmp/voice-mobile-canary-health.json 2>/dev/null; then ready=1; break; fi
               sleep 1
             done
             test "$ready" = 1
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restore-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-            rm -f /tmp/voice-restore-health.json
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-canary-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
 
-            echo '=== RESTORE_EDGE_AND_PERSIST ==='
-            test -f "$CONF"
-            if grep -A8 -F 'location ^~ /api/' "$CONF" | grep -qF 'proxy_pass http://127.0.0.1:3005;'; then
-              sed -i '/location \^~ \/api\//,/^[[:space:]]*}/ s#proxy_pass http://127.0.0.1:3005;#proxy_pass http://127.0.0.1:4190;#' "$CONF"
-            fi
-            grep -A8 -F 'location ^~ /api/' "$CONF" | grep -qF 'proxy_pass http://127.0.0.1:4190;'
-            nginx -t
-            systemctl restart nginx
-            PM2_HOME="$PM2_HOME" pm2 save
-            sleep 2
+            echo '=== 6. ISOLATED_E2E ==='
+            MEETING=$(curl -fsSL --max-time 10 -X POST "http://127.0.0.1:$PORT/api/v1/meetings" -H 'content-type: application/json' --data '{"type":"internal","title":"mobile-safety-canary","peer_id":"qa","name":"QA","language":"ko-KR"}')
+            MID=$(printf '%s' "$MEETING" | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const d=JSON.parse(s);process.stdout.write(d.data.id)})")
+            test -n "$MID"
+            CAPTION=$(curl -fsSL --max-time 30 -X POST "http://127.0.0.1:$PORT/api/v1/meetings/$MID/captions" -H 'content-type: application/json' --data '{"peer_id":"qa","speaker":"QA","language":"ko-KR","detected_language":"ko-KR","target_language":"en-US","text":"오늘 회의는 오후 세 시에 시작합니다","final":true,"client_id":"mobile-safety-canary"}')
+            printf '%s' "$CAPTION" | node -e "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const d=JSON.parse(s).data||{},t=d.translations?.['en-US']||'';if(!t||t===d.text||d.pending_translation!==false)process.exit(1);console.log('PC_TRANSLATION='+t)})"
+            LOW_CODE=$(curl -sS --max-time 15 -X POST "http://127.0.0.1:$PORT/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-target: en-US' -H 'x-voice-duration-ms: 6500' --data-binary "@$LOW" -o /tmp/voice-mobile-canary-low.json -w '%{http_code}')
+            test "$LOW_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-canary-low.json','utf8'));if(!d.ok||!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1);console.log('SILENCE_GATE=PASS')"
+            REAL_CODE=$(curl -sS --max-time 80 -X POST "http://127.0.0.1:$PORT/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: en-US' -H 'x-voice-target: ko-KR' -H 'x-voice-duration-ms: 3300' --data-binary "@$AUDIO" -o /tmp/voice-mobile-canary-real.json -w '%{http_code}')
+            test "$REAL_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-canary-real.json','utf8'));if(!d.ok||!String(d.text||'').trim()||!String(d.translation||'').trim()||!/local-whisper/i.test(String(d.provider||'')))process.exit(1);console.log('MOBILE_ORIGINAL='+d.text);console.log('MOBILE_TRANSLATION='+d.translation);console.log('MOBILE_PROVIDER='+d.provider)"
+            echo 'ISOLATED_CANARY=PASS'
 
-            echo '=== LOCAL_REGRESSION ==='
-            test "$(curl -sS --max-time 10 -o /tmp/voice-public-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-public-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-            rm -f /tmp/voice-public-health.json
-            test "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/)" = 200
+            echo '=== 7. STOP_CANARY_AND_INSTALL ==='
+            pid=$(cat "$PIDFILE")
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            rm -f "$PIDFILE"
+            install -m 644 "$STAGE/public/app.js" "$RUNTIME/app.js"
+            install -m 644 "$STAGE/public/index.html" "$RUNTIME/index.html"
+            install -m 644 "$STAGE/public/sw.js" "$RUNTIME/sw.js"
+            install -m 644 "$STAGE/public/app.js" "$ROOT/public/app.js"
+            install -m 644 "$STAGE/public/index.html" "$ROOT/public/index.html"
+            install -m 644 "$STAGE/public/sw.js" "$ROOT/public/sw.js"
+            install -m 644 "$STAGE/server-v2.mjs" "$ROOT/server-v2.mjs"
+            INSTALLED=1
+            PM2_HOME=/root/.pm2 pm2 restart voice-core-full --update-env
+            ready=0
+            for n in $(seq 1 40); do
+              if curl -fsSL --max-time 3 http://127.0.0.1:4190/api/health >/tmp/voice-mobile-live-health.json 2>/dev/null; then ready=1; break; fi
+              sleep 1
+            done
+            test "$ready" = 1
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-live-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+
+            echo '=== 8. LIVE_E2E_AND_REGRESSION ==='
+            curl -fsSL --max-time 15 http://127.0.0.1:4190/api/v1/meetings -o /tmp/voice-mobile-live-meetings.json
+            LIVE_MID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-live-meetings.json','utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" )
+            LIVE_LOW_CODE=$(curl -sS --max-time 15 -X POST "http://127.0.0.1:4190/api/v1/meetings/$LIVE_MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-duration-ms: 6500' --data-binary "@$LOW" -o /tmp/voice-mobile-live-low.json -w '%{http_code}')
+            test "$LIVE_LOW_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-live-low.json','utf8'));if(!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1)"
+            LIVE_REAL_CODE=$(curl -sS --max-time 80 -X POST "http://127.0.0.1:4190/api/v1/meetings/$LIVE_MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: en-US' -H 'x-voice-target: ko-KR' -H 'x-voice-duration-ms: 3300' --data-binary "@$AUDIO" -o /tmp/voice-mobile-live-real.json -w '%{http_code}')
+            test "$LIVE_REAL_CODE" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-live-real.json','utf8'));if(!d.ok||!String(d.text||'').trim()||!String(d.translation||'').trim()||!/local-whisper/i.test(String(d.provider||'')))process.exit(1);console.log('LIVE_MOBILE_ORIGINAL='+d.text);console.log('LIVE_MOBILE_TRANSLATION='+d.translation)"
+            test "$(curl -sS --max-time 15 -o /tmp/voice-mobile-public-app.js -w '%{http_code}' 'https://voice.star45.net/app.js?v=3.5.25')" = 200
+            cmp -s "$RUNTIME/app.js" /tmp/voice-mobile-public-app.js
+            test "$(curl -sS --max-time 10 -o /tmp/voice-mobile-public-index.html -w '%{http_code}' 'https://voice.star45.net/?v=3.5.25')" = 200
+            grep -qF 'app.js?v=3.5.25' /tmp/voice-mobile-public-index.html
+            test "$(curl -sS --max-time 10 -o /tmp/voice-mobile-public-sw.js -w '%{http_code}' https://voice.star45.net/sw.js)" = 200
+            grep -qF 'voiceflow-shell-v3525-mobile-voice-safe' /tmp/voice-mobile-public-sw.js
+            test "$(curl -sS --max-time 10 -o /tmp/voice-mobile-public-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-mobile-public-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
-            test "$(docker inspect --format '{{.State.Status}}' voiceflow-local-stt)" = running
-            PM2_HOME="$PM2_HOME" pm2 describe voice-core-full | grep -q 'online'
-            grep -q 'voice-core-full' "$PM2_HOME/dump.pm2"
-            echo 'VOICE_CORE_RESTORED=PASS'
-            echo 'KNOWN_GOOD_FILES_RESTORED=PASS'
-            echo 'PUBLIC_API=PASS'
+            nginx -t
+            PM2_HOME=/root/.pm2 pm2 save
+            node -e "const fs=require('fs'),before=JSON.parse(fs.readFileSync(process.argv[1],'utf8')),d='/opt/star45/voiceflow-data';for(const n of ['users','sessions','meetings','captions']){const current=JSON.parse(fs.readFileSync(d+'/'+n+'.json','utf8')).length;if(current<before[n])throw new Error(n+'_count_decreased')}console.log('DATA_PRESERVED=PASS')" "$BACKUP/counts-before.json"
+            sha256sum "$RUNTIME/app.js" "$RUNTIME/index.html" "$RUNTIME/sw.js" "$ROOT/server-v2.mjs" > "$BACKUP/hashes-after.txt"
+            printf 'status=PASS\nmobile_android=browser_speech_primary\nserver_silence_gate=enabled\nmobile_interim=disabled\nui_version=3.5.25\nrollback=%s\n' "$BACKUP" > "$BACKUP/README.txt"
+            SUCCESS=1
+            echo 'MOBILE_ANDROID_BROWSER_STT=PASS'
+            echo 'MOBILE_SERVER_SILENCE_GATE=PASS'
+            echo 'TEXT_INPUT_PRESERVED=PASS'
+            echo 'PC_TRANSLATION_PRESERVED=PASS'
+            echo 'DEPLOYMENT_COMPLETE=PASS'
+            echo "BACKUP=$BACKUP"
 
-      - name: Verify restored Voice independently
+      - name: Verify mobile safety independently from external network
         shell: bash
         run: |
           set -euo pipefail
           BASE=https://voice.star45.net
-          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/root -w '%{http_code}' "$BASE/?restore=${{ github.run_id }}")" = 200
-          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' "$BASE/api/health")" = 200
-          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-          for port in 3005 3006 4186 4190; do
+          RUN_KEY='${{ github.run_id }}'
+          trap 'rm -f /tmp/vf-*' EXIT
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/vf-index -w '%{http_code}' "$BASE/?v=3.5.25-$RUN_KEY")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/vf-app -w '%{http_code}' "$BASE/app.js?v=3.5.25-$RUN_KEY")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/vf-sw -w '%{http_code}' "$BASE/sw.js?v=$RUN_KEY")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/vf-health -w '%{http_code}' "$BASE/api/health")" = 200
+          grep -qF 'app.js?v=3.5.25' /tmp/vf-index
+          grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' /tmp/vf-app
+          grep -qF 'r.interimResults=!mobileBrowserSpeech' /tmp/vf-app
+          grep -qF 'blob.size>=mobileMinBytes' /tmp/vf-app
+          grep -qF 'voiceflow-shell-v3525-mobile-voice-safe' /tmp/vf-sw
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+          curl -fsSL --max-time 20 "$BASE/api/v1/meetings" -o /tmp/vf-meetings
+          MID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-meetings','utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" )
+          dd if=/dev/zero of=/tmp/vf-low bs=2000 count=1 status=none
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -X POST "$BASE/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-duration-ms: 6500' --data-binary @/tmp/vf-low -o /tmp/vf-low-response -w '%{http_code}')" = 200
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/vf-low-response','utf8'));if(!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1)"
+          for port in 3005 3006 4186 4190 4191; do
             code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
             echo "DIRECT_PORT_$port=$code"
             test "$code" = 000
           done
-          rm -f /tmp/root /tmp/health
-          echo 'INDEPENDENT_RESTORE_VERIFICATION=PASS'
+          echo 'INDEPENDENT_MOBILE_SAFETY=PASS'
