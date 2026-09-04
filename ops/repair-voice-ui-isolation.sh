@@ -182,14 +182,17 @@ test "$ROOT_CODE" = 200
 test "$APP_CODE" = 200
 test "$HEALTH_CODE" = 200
 test "$RETIRED_CODE" = 308
-test "$RETIRED_LOCATION" = '/'
+case "$RETIRED_LOCATION" in
+  /|https://voice.star45.net/|http://voice.star45.net/) ;;
+  *) echo "unexpected retired redirect location: $RETIRED_LOCATION"; exit 1 ;;
+esac
 test "$FRONTEND_V4_CODE" = 410
 test "$LEGAL_CODE" = 200
 AFTER_PID=$(pm2 pid voice | head -1)
 test "$AFTER_PID" = "$BEFORE_PID"
 nginx -t
 rm -f "$LOCAL_INDEX" "$LOCAL_APP" "$LOCAL_HEALTH" "$STAGE"
-printf 'status=PASS\nserved_hash=%s\nvoice_pid=%s\nretired_route=/v4/mobile -> /\nfrontend_v4=410\n' "$SERVED_HASH" "$AFTER_PID" >> "$QUARANTINE/README.txt"
+printf 'status=PASS\nserved_hash=%s\nvoice_pid=%s\nretired_route=/v4/mobile -> %s\nfrontend_v4=410\n' "$SERVED_HASH" "$AFTER_PID" "$RETIRED_LOCATION" >> "$QUARANTINE/README.txt"
 APPLIED=0
 trap - EXIT HUP INT TERM
 echo "CANONICAL_UI_LOCAL=PASS HASH=$SERVED_HASH"
