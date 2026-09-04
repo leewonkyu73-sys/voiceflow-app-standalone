@@ -1,0 +1,21 @@
+name: Deploy Standalone
+on:
+  push:
+    branches: [ main ]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script: |
+            cd /opt/star45/voiceflow-app-standalone
+            git pull origin main
+            npm ci --omit=dev || npm install
+            npm run build || true
+            pm2 restart voiceflow-standalone || pm2 start npm --name voiceflow-standalone -- start -- --port 3006
+            pm2 save
