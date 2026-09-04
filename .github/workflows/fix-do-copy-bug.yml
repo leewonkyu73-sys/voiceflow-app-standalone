@@ -1,0 +1,85 @@
+name: Fix DO Copy Bug
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script: |
+            cd /root/voiceflow-app-standalone || cd ~/voiceflow-app-standalone
+            cat > app/page.tsx <<'TSX'
+            "use client";
+            import { useState, useRef } from "react";
+
+            export default function DoPage() {
+              const [text, setText] = useState("");
+              const [recording, setRecording] = useState(false);
+              const recognitionRef = useRef<any>(null);
+
+              const startRec = () => {
+                const SR: any = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+                if (!SR) { alert("이 브라우저는 음성인식을 지원하지 않습니다. 크롬에서 열어주세요."); return; }
+                const rec = new SR();
+                rec.lang = "ko-KR";
+                rec.continuous = true;
+                rec.interimResults = true;
+                rec.onresult = (e: any) => {
+                  let finalText = "";
+                  for (let i = e.resultIndex; i < e.results.length; i++) {
+                    if (e.results[i].isFinal) finalText += e.results[i][0].transcript + " ";
+                  }
+                  if (finalText) setText(prev => prev + finalText);
+                };
+                rec.onend = () => setRecording(false);
+                recognitionRef.current = rec;
+                rec.start();
+                setRecording(true);
+              };
+
+              const stopRec = () => {
+                recognitionRef.current?.stop();
+                setRecording(false);
+              };
+
+              return (
+                <div style={{maxWidth:700, margin:"40px auto", padding:20, fontFamily:"sans-serif"}}>
+                  <h1 style={{fontSize:28, fontWeight:800}}>DO - 음성녹음 인식앱 (voice 복사본)</h1>
+                  <p style={{color:"#666"}}>복사/붙여넣기 시 숫자만 보이는 버그 수정됨 - 전체 텍스트 유지</p>
+
+                  <div style={{display:"flex", gap:10, margin:"20px 0"}}>
+                    <button onClick={recording? stopRec : startRec} style={{padding:"12px 20px", borderRadius:10, background: recording? "#ef4444" : "#2563eb", color:"white", border:"none", fontWeight:700}}>
+                      {recording? "● 중지" : "● 녹음 시작"}
+                    </button>
+                    <button onClick={()=>setText("")} style={{padding:"12px 20px", borderRadius:10, background:"#eee", border:"none"}}>지우기</button>
+                    <button onClick={()=>navigator.clipboard.writeText(text)} style={{padding:"12px 20px", borderRadius:10, background:"#10b981", color:"white", border:"none"}}>복사</button>
+                  </div>
+
+                  <textarea
+                    value={text}
+                    onChange={(e)=>setText(e.target.value)}
+                    onPaste={(e)=>{
+                      // 숫자만 보이는 버그 수정: 클립보드 전체 텍스트 그대로 유지
+                      e.preventDefault();
+                      const pasted = e.clipboardData.getData("text/plain");
+                      const start = e.currentTarget.selectionStart;
+                      const end = e.currentTarget.selectionEnd;
+                      const newText = text.substring(0,start) + pasted + text.substring(end);
+                      setText(newText);
+                    }}
+                    placeholder="여기에 녹음 텍스트가 표시됩니다. 붙여넣기 해도 전체 내용이 유지됩니다."
+                    style={{width:"100%", height:300, padding:16, borderRadius:12, border:"1px solid #ddd", fontSize:16, lineHeight:1.6}}
+                  />
+                  <div style={{marginTop:10, color:"#888", fontSize:13}}>글자수: {text.length} | {text? "내용 있음" : "내용 없음"}</div>
+                </div>
+              );
+            }
+            TSX
+            npm run build
+            pm2 restart do
+            echo "복사 버그 수정 완료 - 숫자만 보이는 필터 제거됨"
