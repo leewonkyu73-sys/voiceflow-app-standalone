@@ -35,5 +35,6 @@ jobs:
             trap 'rm -f "$SCRIPT"' EXIT
             git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin d2426754c7514a1afcbf8fb00937816c434c4bdf
             git -C "$ROOT" -c safe.directory="$ROOT" show d2426754c7514a1afcbf8fb00937816c434c4bdf:ops/restore-local-whisper-sidecar.sh > "$SCRIPT"
+            sed -i 's/-v load="/-v load1="/; s/load <= cores/load1 <= cores/' "$SCRIPT"
             chmod 700 "$SCRIPT"
             RUN_KEY=${{ github.run_id }} bash "$SCRIPT"
