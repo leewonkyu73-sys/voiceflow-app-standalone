@@ -1,4 +1,4 @@
-name: Complete Voice edge restoration after proxy removal
+name: Restore Voice core after runner child cleanup
 
 on:
   push:
@@ -11,84 +11,106 @@ permissions:
   contents: read
 
 concurrency:
-  group: voice-edge-emergency-restore
+  group: voice-core-emergency-restore
   cancel-in-progress: false
 
 jobs:
   restore:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
-      - name: Restore system Nginx and full-core route
+      - name: Restore previous Voice core through independent SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 6m
+          command_timeout: 8m
           script_stop: true
           script: |
             set -euo pipefail
-            RUN_ID='${{ github.run_id }}'
+            ROOT=/opt/star45/voiceflow-smart-workspace
+            RUNTIME=/opt/star45/voiceflow-runtime-public
+            FAILED_RUN=33910249191
+            BACKUP=/opt/star45/quarantine/voice-mobile-safety-$FAILED_RUN
             CONF=/etc/nginx/sites-enabled/voice.star45.net
-            BACKUP=/opt/star45/quarantine/voice-edge-final-$RUN_ID
-            mkdir -p "$BACKUP"
-            chmod 700 "$BACKUP"
-            cp -a "$CONF" "$BACKUP/voice.star45.net.before"
+            PM2_HOME=/root/.pm2
 
-            docker rm -f voiceflow-proxy voiceflow-emergency-proxy >/dev/null 2>&1 || true
+            echo '=== CURRENT_STATE ==='
+            date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            uptime
+            PM2_HOME="$PM2_HOME" pm2 list || true
+            ss -ltnp | grep -E ':(80|443|3005|3006|4186|4190)([[:space:]]|$)' || true
+            curl -sS --max-time 5 http://127.0.0.1:4190/api/health || true
+            echo
+
+            echo '=== RESTORE_KNOWN_GOOD_FILES ==='
+            test -d "$BACKUP"
+            for f in app.js index.html sw.js; do
+              test -f "$BACKUP/runtime-$f"
+              test -f "$BACKUP/source-$f"
+              install -m 644 "$BACKUP/runtime-$f" "$RUNTIME/$f"
+              install -m 644 "$BACKUP/source-$f" "$ROOT/public/$f"
+            done
+            test -f "$BACKUP/server-v2.mjs"
+            install -m 644 "$BACKUP/server-v2.mjs" "$ROOT/server-v2.mjs"
+            node --check "$ROOT/server-v2.mjs"
+            node --check "$RUNTIME/app.js"
+
+            echo '=== START_FULL_CORE_OUTSIDE_RUNNER_TRACKING ==='
+            if PM2_HOME="$PM2_HOME" pm2 describe voice-core-full >/dev/null 2>&1; then
+              PM2_HOME="$PM2_HOME" pm2 restart voice-core-full --update-env
+            else
+              test -x /opt/star45/runtime/voice-core-full/start.sh
+              PM2_HOME="$PM2_HOME" pm2 start /opt/star45/runtime/voice-core-full/start.sh --name voice-core-full
+            fi
+            ready=0
+            for n in $(seq 1 40); do
+              if curl -fsSL --max-time 3 http://127.0.0.1:4190/api/health >/tmp/voice-restore-health.json 2>/dev/null; then ready=1; break; fi
+              sleep 1
+            done
+            test "$ready" = 1
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restore-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            rm -f /tmp/voice-restore-health.json
+
+            echo '=== RESTORE_EDGE_AND_PERSIST ==='
             test -f "$CONF"
             if grep -A8 -F 'location ^~ /api/' "$CONF" | grep -qF 'proxy_pass http://127.0.0.1:3005;'; then
               sed -i '/location \^~ \/api\//,/^[[:space:]]*}/ s#proxy_pass http://127.0.0.1:3005;#proxy_pass http://127.0.0.1:4190;#' "$CONF"
             fi
             grep -A8 -F 'location ^~ /api/' "$CONF" | grep -qF 'proxy_pass http://127.0.0.1:4190;'
-            PM2_HOME=/root/.pm2 pm2 describe voice-core-full | grep -q 'online'
-            test "$(curl -sS --max-time 8 -o /tmp/full-health-$RUN_ID.json -w '%{http_code}' http://127.0.0.1:4190/api/health)" = 200
-            node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/full-health-$RUN_ID.json
-            rm -f /tmp/full-health-$RUN_ID.json
-
             nginx -t
             systemctl restart nginx
-            ready=0
-            for n in $(seq 1 20); do
-              if curl -k -fsSL --max-time 4 --resolve voice.star45.net:443:127.0.0.1 https://voice.star45.net/api/health >/tmp/public-health-$RUN_ID.json 2>/dev/null; then ready=1; break; fi
-              sleep 1
-            done
-            test "$ready" = 1
-            node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/public-health-$RUN_ID.json
-            rm -f /tmp/public-health-$RUN_ID.json
-            ss -ltnp | grep -E '0\.0\.0\.0:(80|443)' | grep -q nginx
-            ! docker inspect voiceflow-proxy >/dev/null 2>&1
-            test "$(sha256sum /opt/star45/voiceflow-runtime-public/app.js | awk '{print $1}')" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
-            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
-            printf 'status=PASS\nlegacy_proxy=removed\nnginx=systemd\napi_upstream=127.0.0.1:4190\nrollback_config=%s\n' "$BACKUP/voice.star45.net.before" > "$BACKUP/README.txt"
-            echo 'LEGACY_V269_PROXY=REMOVED'
-            echo 'SYSTEM_NGINX=RESTORED'
-            echo 'FULL_CORE_ROUTE_4190=PASS'
-            echo 'LOCAL_VERIFICATION=PASS'
-            echo "BACKUP=$BACKUP"
+            PM2_HOME="$PM2_HOME" pm2 save
+            sleep 2
 
-      - name: Verify externally after restoration
+            echo '=== LOCAL_REGRESSION ==='
+            test "$(curl -sS --max-time 10 -o /tmp/voice-public-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
+            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-public-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
+            rm -f /tmp/voice-public-health.json
+            test "$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' https://voice.star45.net/)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
+            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
+            test "$(docker inspect --format '{{.State.Status}}' voiceflow-local-stt)" = running
+            PM2_HOME="$PM2_HOME" pm2 describe voice-core-full | grep -q 'online'
+            grep -q 'voice-core-full' "$PM2_HOME/dump.pm2"
+            echo 'VOICE_CORE_RESTORED=PASS'
+            echo 'KNOWN_GOOD_FILES_RESTORED=PASS'
+            echo 'PUBLIC_API=PASS'
+
+      - name: Verify restored Voice independently
         shell: bash
         run: |
           set -euo pipefail
-          RUN_ID='${{ github.run_id }}'
-          INDEX=/tmp/index-$RUN_ID
-          APP=/tmp/app-$RUN_ID
-          HEALTH=/tmp/health-$RUN_ID
-          trap 'rm -f "$INDEX" "$APP" "$HEALTH"' EXIT
-          ROOT_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$INDEX" -w '%{http_code}' "https://voice.star45.net/?ts=$RUN_ID")
-          APP_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o "$APP" -w '%{http_code}' "https://voice.star45.net/app.js?ts=$RUN_ID")
-          HEALTH_CODE=$(curl -sS --connect-timeout 10 --max-time 20 -o "$HEALTH" -w '%{http_code}' https://voice.star45.net/api/health)
-          test "$ROOT_CODE" = 200
-          test "$APP_CODE" = 200
-          test "$HEALTH_CODE" = 200
-          test "$(sha256sum "$APP" | awk '{print $1}')" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
-          node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" "$HEALTH"
+          BASE=https://voice.star45.net
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -H 'Cache-Control: no-cache' -o /tmp/root -w '%{http_code}' "$BASE/?restore=${{ github.run_id }}")" = 200
+          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' "$BASE/api/health")" = 200
+          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
           for port in 3005 3006 4186 4190; do
             code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            echo "DIRECT_PORT_$port=$code"
             test "$code" = 000
           done
-          echo 'EXTERNAL_EDGE_RESTORATION=PASS'
-          echo "ROOT=$ROOT_CODE APP=$APP_CODE API=$HEALTH_CODE"
+          rm -f /tmp/root /tmp/health
+          echo 'INDEPENDENT_RESTORE_VERIFICATION=PASS'
