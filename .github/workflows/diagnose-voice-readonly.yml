@@ -1,4 +1,4 @@
-name: Diagnose voice.star45.net read-only
+name: Diagnose voice.star45.net DNS read-only
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect VPS without changes
+      - name: Inspect DNS and endpoint without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
@@ -22,67 +22,43 @@ jobs:
           command_timeout: 5m
           script_stop: false
           script: |
-            echo "=== TIME_AND_HOST ==="
+            echo "=== TIME ==="
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
-            hostname
-            uptime
-            free -m
-            df -h /
 
-            echo "=== PM2_STATUS ==="
-            pm2 list || true
-            for app in do voiceflow-standalone voiceflow-core; do
-              echo "APP=$app PID=$(pm2 pid "$app" 2>/dev/null || true)"
-            done
+            echo "=== HOSTS_OVERRIDE ==="
+            grep -nE 'voice\.star45\.net|star45\.net' /etc/hosts || echo "NO_HOSTS_OVERRIDE"
 
-            echo "=== PROCESS_SNAPSHOT ==="
-            ps -eo pid,ppid,etimes,cmd --sort=pid | grep -E 'node .*server\.mjs|npm.*start|PM2' | grep -v grep || true
+            echo "=== RESOLVER_CONFIG ==="
+            sed -n '1,80p' /etc/resolv.conf
 
-            echo "=== PORT_LISTENERS ==="
-            ss -ltnp | grep -E ':(80|443|3005|3006|4173)([[:space:]]|$)' || true
-
-            echo "=== NGINX_CONFIG_TEST ==="
-            nginx -t 2>&1 || true
-
-            echo "=== NGINX_VOICE_ROUTES ==="
-            grep -RInE 'server_name[^;]*voice\.star45\.net|proxy_pass[[:space:]]+http://127\.0\.0\.1:(3005|3006|4173)' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
-
-            echo "=== LOCAL_APP_PROBES ==="
-            for port in 3005 3006 4173; do
-              rm -f "/tmp/voice-probe-$port"
-              curl -sS --max-time 8 -o "/tmp/voice-probe-$port" -w "PORT=$port CODE=%{http_code} SIZE=%{size_download} TIME=%{time_total}\n" "http://127.0.0.1:$port/" || echo "PORT=$port CURL_FAILED=$?"
-              if [ -s "/tmp/voice-probe-$port" ]; then
-                printf 'BODY_%s=' "$port"
-                head -c 160 "/tmp/voice-probe-$port" | tr '\n' ' '
-                echo
-              fi
-            done
-
-            echo "=== LOCAL_NGINX_HTTP_PROBE ==="
-            curl -sS --max-time 8 -H 'Host: voice.star45.net' -o /tmp/voice-nginx-http -w 'HTTP CODE=%{http_code} REDIRECT=%{redirect_url} SIZE=%{size_download} TIME=%{time_total}\n' http://127.0.0.1/ || echo "HTTP_CURL_FAILED=$?"
-
-            echo "=== LOCAL_NGINX_HTTPS_PROBE ==="
-            curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /tmp/voice-nginx-https -w 'HTTPS CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL_VERIFY=%{ssl_verify_result}\n' https://voice.star45.net/ || echo "HTTPS_CURL_FAILED=$?"
-            if [ -s /tmp/voice-nginx-https ]; then
-              printf 'HTTPS_BODY='
-              head -c 200 /tmp/voice-nginx-https | tr '\n' ' '
-              echo
-            fi
-
-            echo "=== CERTIFICATE ==="
-            echo | openssl s_client -connect 127.0.0.1:443 -servername voice.star45.net 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
-
-            echo "=== PUBLIC_DNS_AND_HTTPS_FROM_VPS ==="
+            echo "=== SYSTEM_RESOLUTION ==="
             getent ahostsv4 voice.star45.net || true
-            curl -sS --max-time 12 -o /tmp/voice-public -w 'PUBLIC CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL_VERIFY=%{ssl_verify_result}\n' https://voice.star45.net/ || echo "PUBLIC_CURL_FAILED=$?"
+            getent ahostsv6 voice.star45.net || true
 
-            echo "=== RELEVANT_PM2_ERRORS ==="
-            for f in /root/.pm2/logs/do-error.log /root/.pm2/logs/voiceflow-standalone-error.log; do
-              if [ -f "$f" ]; then
-                echo "FILE=$f"
-                tail -n 80 "$f" | grep -E 'EADDRINUSE|ECONN|listen|Error|error|port' | tail -n 30 || true
-              fi
-            done
+            echo "=== PUBLIC_RESOLVER_TOOLS ==="
+            if command -v dig >/dev/null 2>&1; then
+              echo "CLOUDFLARE_A"
+              dig +time=5 +tries=1 +short A voice.star45.net @1.1.1.1 || true
+              echo "GOOGLE_A"
+              dig +time=5 +tries=1 +short A voice.star45.net @8.8.8.8 || true
+              echo "CLOUDFLARE_NS"
+              dig +time=5 +tries=1 +short NS star45.net @1.1.1.1 || true
+              echo "CLOUDFLARE_SOA"
+              dig +time=5 +tries=1 +short SOA star45.net @1.1.1.1 || true
+            else
+              echo "DIG_NOT_INSTALLED"
+            fi
+            if command -v host >/dev/null 2>&1; then host voice.star45.net 1.1.1.1 || true; fi
+            if command -v nslookup >/dev/null 2>&1; then nslookup voice.star45.net 8.8.8.8 || true; fi
 
-            rm -f /tmp/voice-probe-3005 /tmp/voice-probe-3006 /tmp/voice-probe-4173 /tmp/voice-nginx-http /tmp/voice-nginx-https /tmp/voice-public
-            echo "=== DIAGNOSTIC_COMPLETE ==="
+            echo "=== CURRENT_RUNTIME ==="
+            pm2 list || true
+            ss -ltnp | grep -E ':(80|443|3005|3006)([[:space:]]|$)' || true
+            grep -RInE 'server_name[^;]*voice\.star45\.net|proxy_pass[[:space:]]+http://127\.0\.0\.1:(3005|3006)' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
+
+            echo "=== HTTPS_CHECKS ==="
+            curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /tmp/voice-local -w 'LOCAL_HTTPS CODE=%{http_code} SIZE=%{size_download} TIME=%{time_total}\n' https://voice.star45.net/ || true
+            curl -sS --max-time 12 -o /tmp/voice-public -w 'PUBLIC_HTTPS CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL=%{ssl_verify_result}\n' https://voice.star45.net/ || true
+            rm -f /tmp/voice-local /tmp/voice-public
+
+            echo "=== DNS_DIAGNOSTIC_COMPLETE ==="
