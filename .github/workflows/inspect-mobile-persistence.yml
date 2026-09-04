@@ -1,4 +1,4 @@
-name: Restart-test persisted mobile voice safety
+name: Trace periodic Voice source reversion
 
 on:
   push:
@@ -11,126 +11,64 @@ permissions:
   contents: read
 
 jobs:
-  restart_test:
+  trace:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Restart full core and verify mobile safety end to end
+      - name: Inspect timers, services and file timestamps without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 12m
-          script_stop: true
+          command_timeout: 7m
+          script_stop: false
           script: |
-            set -euo pipefail
+            set -u
             ROOT=/opt/star45/voiceflow-smart-workspace
             RUNTIME=/opt/star45/voiceflow-runtime-public
-            RUN_KEY='${{ github.run_id }}'
-            FALLBACK=/opt/star45/quarantine/voice-mobile-align-33911316424
-            AUDIO=/tmp/voice-restart-test-$RUN_KEY.webm
-            LOW=/tmp/voice-restart-low-$RUN_KEY.webm
-            SUCCESS=0
-
-            recover() {
-              code=$?
-              if [ "$code" -ne 0 ] && [ "$SUCCESS" -ne 1 ]; then
-                echo '=== RESTART_TEST_RECOVERY ==='
-                if [ -f "$FALLBACK/server-v2.mjs" ]; then
-                  install -m 644 "$FALLBACK/server-v2.mjs" "$ROOT/server-v2.mjs"
-                  PM2_HOME=/root/.pm2 pm2 restart voice-core-full --update-env >/dev/null 2>&1 || true
-                  PM2_HOME=/root/.pm2 pm2 save >/dev/null 2>&1 || true
-                fi
-                curl -sS --max-time 10 https://voice.star45.net/api/health || true
-                echo
-              fi
-              rm -f "$AUDIO" "$LOW" /tmp/voice-restart-*.json
-              exit "$code"
-            }
-            trap recover EXIT INT TERM
-
-            echo '=== PRECHECK ==='
+            echo '=== TIME_HEALTH ==='
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
             uptime
-            free -m
-            grep -qF "reason:'audio_below_speech_floor'" "$ROOT/server-v2.mjs"
-            cmp -s "$ROOT/public/app.js" "$RUNTIME/app.js"
-            cmp -s "$ROOT/public/index.html" "$RUNTIME/index.html"
-            cmp -s "$ROOT/public/sw.js" "$RUNTIME/sw.js"
-            node --check "$ROOT/server-v2.mjs"
-            node --check "$RUNTIME/app.js"
-            test "$(curl -sS --max-time 10 -o /tmp/voice-restart-pre.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
-
-            echo '=== PREPARE_AUDIO ==='
-            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin ae2fb5d9aee5904104718027336d84584aef6e41
-            git -C "$ROOT" -c safe.directory="$ROOT" show ae2fb5d9aee5904104718027336d84584aef6e41:ops/voice-stt-canary.webm.b64 | tr -d '\r\n' | base64 -d > "$AUDIO"
-            truncate -s 16000 "$AUDIO"
-            dd if=/dev/zero of="$LOW" bs=2000 count=1 status=none
-
-            echo '=== RESTART_FROM_DISK ==='
-            PM2_HOME=/root/.pm2 pm2 restart voice-core-full --update-env
-            ready=0
-            for n in $(seq 1 40); do
-              if curl -fsSL --max-time 3 http://127.0.0.1:4190/api/health >/tmp/voice-restart-health.json 2>/dev/null; then ready=1; break; fi
-              sleep 1
+            curl -sS --max-time 8 https://voice.star45.net/api/health || true
+            echo
+            echo '=== FILE_STATE ==='
+            for f in "$ROOT/server-v2.mjs" "$ROOT/public/app.js" "$ROOT/public/index.html" "$ROOT/public/sw.js" "$RUNTIME/app.js" "$RUNTIME/index.html" "$RUNTIME/sw.js"; do
+              if [ -f "$f" ]; then
+                stat -c 'FILE=%n MTIME=%y SIZE=%s INODE=%i' "$f"
+                sha256sum "$f"
+                echo "MOBILE_GATE=$(grep -Foc 'audio_below_speech_floor' "$f" 2>/dev/null || true) ANDROID_FIX=$(grep -Foc 'if(mobileSpeech&&!mobileBrowserSpeech)' "$f" 2>/dev/null || true)"
+              fi
             done
-            test "$ready" = 1
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restart-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-            PID=$(PM2_HOME=/root/.pm2 pm2 pid voice-core-full)
-            test -n "$PID"
-            tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^PORT=4190$'
-            tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^DATA_DIR=/opt/star45/voiceflow-data$'
-
-            echo '=== MOBILE_SILENCE_GATE ==='
-            curl -fsSL --max-time 15 http://127.0.0.1:4190/api/v1/meetings -o /tmp/voice-restart-meetings.json
-            MID=$(node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restart-meetings.json','utf8')),m=(d.data||[]).find(x=>/^mtg_[A-Za-z0-9_]+$/.test(String(x.id||'')));if(!m)process.exit(1);process.stdout.write(m.id)" )
-            LOW_CODE=$(curl -sS --max-time 15 -X POST "http://127.0.0.1:4190/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: ko-KR' -H 'x-voice-duration-ms: 6500' --data-binary "@$LOW" -o /tmp/voice-restart-low.json -w '%{http_code}')
-            test "$LOW_CODE" = 200
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restart-low.json','utf8'));if(!d.ok||!d.filtered||d.reason!=='audio_below_speech_floor'||String(d.text||'')!=='')process.exit(1);console.log('SILENCE_GATE=PASS')"
-
-            echo '=== MOBILE_REAL_AUDIO_AND_TRANSLATION ==='
-            REAL_CODE=$(curl -sS --max-time 80 -X POST "http://127.0.0.1:4190/api/v1/meetings/$MID/transcribe" -H 'content-type: audio/webm' -H 'x-voice-client: v4-mobile' -H 'x-voice-language: en-US' -H 'x-voice-target: ko-KR' -H 'x-voice-duration-ms: 3300' --data-binary "@$AUDIO" -o /tmp/voice-restart-real.json -w '%{http_code}')
-            test "$REAL_CODE" = 200
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restart-real.json','utf8'));if(!d.ok||!String(d.text||'').trim()||!String(d.translation||'').trim()||!/local-whisper/i.test(String(d.provider||'')))process.exit(1);console.log('MOBILE_ORIGINAL='+d.text);console.log('MOBILE_TRANSLATION='+d.translation);console.log('STT_PROVIDER='+d.provider);console.log('TRANSLATION_PROVIDER='+d.translation_provider);console.log('REAL_AUDIO=PASS')"
-
-            echo '=== PUBLIC_AND_REGRESSION ==='
-            test "$(curl -sS --max-time 12 -o /tmp/voice-restart-public-health.json -w '%{http_code}' https://voice.star45.net/api/health)" = 200
-            node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/voice-restart-public-health.json','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-            test "$(curl -sS --max-time 12 -o /tmp/voice-restart-public-app.js -w '%{http_code}' 'https://voice.star45.net/app.js?v=3.5.25')" = 200
-            cmp -s "$RUNTIME/app.js" /tmp/voice-restart-public-app.js
-            grep -qF 'chatText' /tmp/voice-restart-public-app.js
-            grep -qF 'sendChat' /tmp/voice-restart-public-app.js
-            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3005/api/health)" = 200
-            test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
-            test "$(docker inspect --format '{{.State.Status}}' voiceflow-local-stt)" = running
-            grep -A5 -F 'location ^~ /api/' /etc/nginx/sites-enabled/voice.star45.net | grep -qF 'proxy_pass http://127.0.0.1:4190;'
-            nginx -t
-            PM2_HOME=/root/.pm2 pm2 save
-            SUCCESS=1
-            echo 'RESTART_FROM_PATCHED_DISK=PASS'
-            echo 'MOBILE_SILENCE_FILTER=PASS'
-            echo 'MOBILE_ORIGINAL_TRANSLATION=PASS'
-            echo 'TEXT_INPUT_MARKERS=PASS'
-            echo 'PC_AND_DO_REGRESSION=PASS'
-
-      - name: Verify public result from independent network
-        shell: bash
-        run: |
-          set -euo pipefail
-          BASE=https://voice.star45.net
-          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/root -w '%{http_code}' "$BASE/?v=3.5.25-${{ github.run_id }}")" = 200
-          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/app -w '%{http_code}' "$BASE/app.js?v=3.5.25-${{ github.run_id }}")" = 200
-          test "$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/health -w '%{http_code}' "$BASE/api/health")" = 200
-          grep -qF 'app.js?v=3.5.25' /tmp/root
-          grep -qF 'if(mobileSpeech&&!mobileBrowserSpeech)' /tmp/app
-          grep -qF 'blob.size>=mobileMinBytes' /tmp/app
-          node -e "const d=JSON.parse(require('fs').readFileSync('/tmp/health','utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)"
-          for port in 3005 3006 4186 4190; do
-            code=$(curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
-            echo "DIRECT_PORT_$port=$code"
-            test "$code" = 000
-          done
-          rm -f /tmp/root /tmp/app /tmp/health
-          echo 'INDEPENDENT_RESTART_VERIFICATION=PASS'
+            echo '=== GIT_STATE ==='
+            git -C "$ROOT" -c safe.directory="$ROOT" rev-parse HEAD 2>/dev/null || true
+            git -C "$ROOT" -c safe.directory="$ROOT" status --short | head -120 || true
+            git -C "$ROOT" -c safe.directory="$ROOT" reflog --date=iso -20 2>/dev/null || true
+            echo '=== SYSTEMD_TIMERS ==='
+            systemctl list-timers --all --no-pager 2>/dev/null | head -120 || true
+            echo '=== RELEVANT_RUNNING_SERVICES ==='
+            systemctl list-units --type=service --state=running --no-pager 2>/dev/null | grep -Ei 'star45|voice|deploy|runner|watch|sync|git|webhook|agent' || true
+            echo '=== RELEVANT_UNIT_FILES ==='
+            grep -RIlE '/opt/star45/voiceflow-smart-workspace|git (pull|reset|checkout|restore)|voiceflow-runtime-public' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -100 || true
+            for f in $(grep -RIlE '/opt/star45/voiceflow-smart-workspace|git (pull|reset|checkout|restore)|voiceflow-runtime-public' /etc/systemd/system /lib/systemd/system 2>/dev/null | head -40); do
+              echo "UNIT_FILE=$f"
+              sed -n '1,220p' "$f"
+            done
+            echo '=== CRON ==='
+            crontab -l 2>/dev/null || true
+            sed -n '1,200p' /etc/crontab 2>/dev/null || true
+            grep -RInE 'voiceflow|/opt/star45|git (pull|reset|checkout|restore)|deploy' /etc/cron.d /etc/cron.hourly /etc/cron.daily 2>/dev/null | head -160 || true
+            echo '=== PROCESSES ==='
+            ps -eo pid,ppid,lstart,etimes,cmd --sort=pid | grep -Ei 'actions-runner|Runner.Listener|Runner.Worker|voiceflow|deployment|watch|sync|git (pull|reset|checkout|restore)|webhook' | grep -v grep | head -200 || true
+            echo '=== DOCKER ==='
+            docker ps --format 'NAME={{.Names}} IMAGE={{.Image}} STATUS={{.Status}}' | grep -Ei 'voice|deploy|watch|sync|webhook|NAME=' || true
+            for c in $(docker ps --format '{{.Names}}' | grep -Ei 'voice|deploy|watch|sync|webhook' | head -30); do
+              echo "CONTAINER=$c"
+              docker inspect "$c" --format '{{range .Mounts}}MOUNT={{.Source}} -> {{.Destination}} RW={{.RW}}{{println}}{{end}}' 2>/dev/null || true
+            done
+            echo '=== RECENT_JOURNAL ==='
+            journalctl --since '2026-09-04 19:15:00 UTC' --no-pager 2>/dev/null | grep -Ei 'voiceflow|git|deploy|runner|checkout|reset|restore|sync' | tail -240 || true
+            echo '=== RUNNER_LOG_TAILS ==='
+            find /opt/star45 -path '*/_diag/*.log' -type f -mmin -30 -print 2>/dev/null | tail -20 | while read -r f; do echo "LOG=$f"; tail -n 80 "$f"; done
+            echo 'TRACE_COMPLETE=YES'
