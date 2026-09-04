@@ -98,14 +98,7 @@ jobs:
             for f in /opt/star45/voiceflow-data/settings.json /opt/star45/voiceflow-smart-workspace/data/settings.json; do
               if [ -f "$f" ]; then
                 echo "SETTINGS_FILE=$f"
-                node - "$f" <<'NODE'
-const fs=require('fs');
-const f=process.argv[2];
-try{
-  const d=JSON.parse(fs.readFileSync(f,'utf8'));
-  console.log(JSON.stringify({providers:d.providers||{},fallback:d.fallback||{},translation:d.translation||{}},null,2));
-}catch(e){console.log('SETTINGS_PARSE_ERROR='+e.message)}
-NODE
+                node -e "const fs=require('fs');const f=process.argv[1];try{const d=JSON.parse(fs.readFileSync(f,'utf8'));console.log(JSON.stringify({providers:d.providers||{},fallback:d.fallback||{},translation:d.translation||{}},null,2))}catch(e){console.log('SETTINGS_PARSE_ERROR='+e.message)}" "$f"
               fi
             done
             find /opt/star45/voiceflow-data -maxdepth 2 -type f -printf '%p %s bytes\n' 2>/dev/null | grep -E 'integration|secret|provider|settings|usage' | head -80 || true
@@ -113,10 +106,13 @@ NODE
 
             echo '=== INTERNAL_SERVICE_PROBES ==='
             for port in 4173 4175 4176 4177 4178 4179 4180 4181 4182 4183 4184 4186; do
+              rm -f /tmp/voice-port-probe
               code=$(curl -sS --max-time 3 -o /tmp/voice-port-probe -w '%{http_code}' "http://127.0.0.1:$port/health" || true)
-              [ "$code" = 000 ] && code=$(curl -sS --max-time 3 -o /tmp/voice-port-probe -w '%{http_code}' "http://127.0.0.1:$port/api/health" || true)
+              if [ "$code" = 000 ] || [ -z "$code" ]; then
+                code=$(curl -sS --max-time 3 -o /tmp/voice-port-probe -w '%{http_code}' "http://127.0.0.1:$port/api/health" || true)
+              fi
               body=$(head -c 300 /tmp/voice-port-probe 2>/dev/null | tr '\n' ' ' || true)
-              echo "PORT=$port CODE=$code BODY=$body"
+              echo "PORT=$port CODE=${code:-000} BODY=$body"
               rm -f /tmp/voice-port-probe
             done
 
