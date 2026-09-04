@@ -1,4 +1,4 @@
-name: Diagnose voice.star45.net DNS read-only
+name: Diagnose voice.star45.net external read-only
 
 on:
   push:
@@ -12,7 +12,7 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect DNS and endpoint without changes
+      - name: Inspect production runtime without changes
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
@@ -22,43 +22,54 @@ jobs:
           command_timeout: 5m
           script_stop: false
           script: |
-            echo "=== TIME ==="
+            echo "=== TIME_AND_CAPACITY ==="
             date -u '+UTC=%Y-%m-%dT%H:%M:%SZ'
+            uptime
+            free -m
+            df -h /
 
-            echo "=== HOSTS_OVERRIDE ==="
+            echo "=== DNS ==="
             grep -nE 'voice\.star45\.net|star45\.net' /etc/hosts || echo "NO_HOSTS_OVERRIDE"
-
-            echo "=== RESOLVER_CONFIG ==="
-            sed -n '1,80p' /etc/resolv.conf
-
-            echo "=== SYSTEM_RESOLUTION ==="
             getent ahostsv4 voice.star45.net || true
-            getent ahostsv6 voice.star45.net || true
-
-            echo "=== PUBLIC_RESOLVER_TOOLS ==="
             if command -v dig >/dev/null 2>&1; then
-              echo "CLOUDFLARE_A"
-              dig +time=5 +tries=1 +short A voice.star45.net @1.1.1.1 || true
-              echo "GOOGLE_A"
-              dig +time=5 +tries=1 +short A voice.star45.net @8.8.8.8 || true
-              echo "CLOUDFLARE_NS"
-              dig +time=5 +tries=1 +short NS star45.net @1.1.1.1 || true
-              echo "CLOUDFLARE_SOA"
-              dig +time=5 +tries=1 +short SOA star45.net @1.1.1.1 || true
-            else
-              echo "DIG_NOT_INSTALLED"
+              echo "CLOUDFLARE_A=$(dig +time=5 +tries=1 +short A voice.star45.net @1.1.1.1 | paste -sd, -)"
+              echo "GOOGLE_A=$(dig +time=5 +tries=1 +short A voice.star45.net @8.8.8.8 | paste -sd, -)"
             fi
-            if command -v host >/dev/null 2>&1; then host voice.star45.net 1.1.1.1 || true; fi
-            if command -v nslookup >/dev/null 2>&1; then nslookup voice.star45.net 8.8.8.8 || true; fi
 
-            echo "=== CURRENT_RUNTIME ==="
+            echo "=== RUNTIME_AND_ROUTE ==="
             pm2 list || true
             ss -ltnp | grep -E ':(80|443|3005|3006)([[:space:]]|$)' || true
+            nginx -t 2>&1 || true
             grep -RInE 'server_name[^;]*voice\.star45\.net|proxy_pass[[:space:]]+http://127\.0\.0\.1:(3005|3006)' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
 
-            echo "=== HTTPS_CHECKS ==="
-            curl -k -sS --max-time 10 --resolve voice.star45.net:443:127.0.0.1 -o /tmp/voice-local -w 'LOCAL_HTTPS CODE=%{http_code} SIZE=%{size_download} TIME=%{time_total}\n' https://voice.star45.net/ || true
-            curl -sS --max-time 12 -o /tmp/voice-public -w 'PUBLIC_HTTPS CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL=%{ssl_verify_result}\n' https://voice.star45.net/ || true
-            rm -f /tmp/voice-local /tmp/voice-public
+            echo "=== SERVER_SIDE_HTTPS ==="
+            for n in 1 2 3; do
+              curl -sS --max-time 12 -o /tmp/voice-public -w "TRY=$n CODE=%{http_code} REMOTE=%{remote_ip} SIZE=%{size_download} TIME=%{time_total} SSL=%{ssl_verify_result}\n" https://voice.star45.net/ || true
+              sleep 1
+            done
+            rm -f /tmp/voice-public
 
-            echo "=== DNS_DIAGNOSTIC_COMPLETE ==="
+            echo "=== RECENT_ERRORS ==="
+            tail -n 120 /var/log/nginx/error.log 2>/dev/null | grep -E 'voice\.star45\.net|3005|upstream|connect\(\) failed|timed out' | tail -n 40 || true
+            tail -n 120 /root/.pm2/logs/voice-error.log 2>/dev/null | grep -E 'EADDRINUSE|ECONN|Error|error|listen' | tail -n 40 || true
+            echo "=== SERVER_DIAGNOSTIC_COMPLETE ==="
+
+      - name: Verify HTTPS independently from GitHub runner
+        shell: bash
+        run: |
+          set -u
+          echo "=== EXTERNAL_DNS ==="
+          getent ahostsv4 voice.star45.net || true
+          echo "=== EXTERNAL_HTTPS ==="
+          failures=0
+          for n in 1 2 3; do
+            code=$(curl -sS --connect-timeout 10 --max-time 20 -o /tmp/voice-external -w '%{http_code}' https://voice.star45.net/) || code=000
+            size=$(wc -c < /tmp/voice-external 2>/dev/null || echo 0)
+            title=$(grep -o '<title>[^<]*' /tmp/voice-external 2>/dev/null | head -1 | sed 's/<title>//' || true)
+            echo "TRY=$n CODE=$code SIZE=$size TITLE=$title"
+            if [ "$code" != "200" ]; then failures=$((failures + 1)); fi
+            rm -f /tmp/voice-external
+            sleep 1
+          done
+          echo "FAILURES=$failures"
+          test "$failures" -eq 0
