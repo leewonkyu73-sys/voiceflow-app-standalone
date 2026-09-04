@@ -1,0 +1,35 @@
+name: Verify Voice retired UI direct-port isolation
+
+on:
+  push:
+    branches:
+      - ops/voice-ui-isolation
+    paths:
+      - .github/workflows/verify-voice-direct-port-isolation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm internal app ports are not publicly usable
+        shell: bash
+        run: |
+          set -euo pipefail
+          failures=0
+          for port in 3005 3006 4173; do
+            body="/tmp/voice-port-$port"
+            code=$(curl -sS --connect-timeout 5 --max-time 8 -o "$body" -w '%{http_code}' "http://187.127.216.242:$port/") || code=000
+            size=$(wc -c < "$body" 2>/dev/null || echo 0)
+            title=$(grep -o '<title>[^<]*' "$body" 2>/dev/null | head -1 | sed 's/<title>//' || true)
+            rm -f "$body"
+            echo "DIRECT_PORT=$port CODE=$code SIZE=$size TITLE=$title"
+            if [ "$code" = 200 ]; then
+              failures=$((failures + 1))
+            fi
+          done
+          echo "PUBLIC_DIRECT_PORT_FAILURES=$failures"
+          test "$failures" -eq 0
+          echo 'DIRECT_PORT_ISOLATION=PASS'
