@@ -1,0 +1,44 @@
+name: Quick inspect legacy Voice cron scripts
+
+on:
+  push:
+    branches:
+      - ops/voice-stt-translation-diagnostic
+    paths:
+      - .github/workflows/inspect-legacy-cron-quick.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read only targeted scripts
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script_stop: false
+          script: |
+            echo '=== ROOT_CRONTAB ==='
+            crontab -l 2>/dev/null || true
+            echo '=== SYSTEM_CRONTAB_VOICE ==='
+            grep -nF 'voiceflow-auto-deploy.sh' /etc/crontab 2>/dev/null || true
+            echo '=== AUTO_DEPLOY_SCRIPT ==='
+            stat -c 'FILE=%n MODE=%a OWNER=%U:%G MTIME=%y SIZE=%s' /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
+            sha256sum /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
+            sed -n '1,240p' /usr/local/bin/voiceflow-auto-deploy.sh 2>/dev/null || true
+            echo '=== PROXY_FIX_SCRIPT ==='
+            stat -c 'FILE=%n MODE=%a OWNER=%U:%G MTIME=%y SIZE=%s' /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
+            sha256sum /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
+            sed -n '1,240p' /opt/voiceflow-proxy/fix.sh 2>/dev/null || true
+            echo '=== CURRENT_HEALTH_AND_EDGE ==='
+            curl -sS --max-time 8 https://voice.star45.net/api/health || true
+            echo
+            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} IMAGE={{.Image}}' | grep -E 'voiceflow-proxy|NAME=' || true
+            echo 'QUICK_INSPECTION_COMPLETE=YES'
