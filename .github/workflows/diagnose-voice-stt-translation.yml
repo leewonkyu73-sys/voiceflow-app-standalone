@@ -1,4 +1,4 @@
-name: Diagnose local Whisper inference through VPS SSH
+name: Persist verified local Whisper sidecar through VPS SSH
 
 on:
   push:
@@ -15,25 +15,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  diagnose:
+  restore:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
-      - name: Execute isolated local Whisper inference diagnostic
+      - name: Start and verify persistent local Whisper sidecar
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 8m
-          script_stop: false
+          command_timeout: 10m
+          script_stop: true
           script: |
             set -euo pipefail
             ROOT=/opt/star45/voiceflow-smart-workspace
-            SCRIPT=/tmp/diagnose-local-whisper-${{ github.run_id }}.sh
+            SCRIPT=/tmp/restore-local-whisper-${{ github.run_id }}.sh
             trap 'rm -f "$SCRIPT"' EXIT
-            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 84bfa3d63370e4015f0aa6663f27d53711743a4b
-            git -C "$ROOT" -c safe.directory="$ROOT" show 84bfa3d63370e4015f0aa6663f27d53711743a4b:ops/diagnose-local-whisper-inference.sh > "$SCRIPT"
+            git -C "$ROOT" -c safe.directory="$ROOT" fetch --quiet origin 801fe2135a8126ab5723a46af8eaa205e4f250f0
+            git -C "$ROOT" -c safe.directory="$ROOT" show 801fe2135a8126ab5723a46af8eaa205e4f250f0:ops/restore-local-whisper-sidecar.sh > "$SCRIPT"
             chmod 700 "$SCRIPT"
             RUN_KEY=${{ github.run_id }} bash "$SCRIPT"
