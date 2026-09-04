@@ -1,4 +1,4 @@
-name: Restore Voice edge after retired v269 interference
+name: Complete Voice edge restoration after proxy removal
 
 on:
   push:
@@ -17,40 +17,27 @@ concurrency:
 jobs:
   restore:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
-      - name: Remove legacy proxy and restore system Nginx full-core route
+      - name: Restore system Nginx and full-core route
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: 187.127.216.242
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          command_timeout: 8m
+          command_timeout: 6m
           script_stop: true
           script: |
             set -euo pipefail
             RUN_ID='${{ github.run_id }}'
             CONF=/etc/nginx/sites-enabled/voice.star45.net
-            BACKUP=/opt/star45/quarantine/voice-edge-post-v269-$RUN_ID
+            BACKUP=/opt/star45/quarantine/voice-edge-final-$RUN_ID
             mkdir -p "$BACKUP"
             chmod 700 "$BACKUP"
             cp -a "$CONF" "$BACKUP/voice.star45.net.before"
-            docker inspect voiceflow-proxy > "$BACKUP/voiceflow-proxy.inspect.json" 2>/dev/null || true
-            docker logs --tail 100 voiceflow-proxy > "$BACKUP/voiceflow-proxy.log" 2>&1 || true
 
-            echo '=== CURRENT_STATE ==='
-            docker ps -a --format 'NAME={{.Names}} STATUS={{.Status}} PORTS={{.Ports}}' | grep -E 'voiceflow-proxy|NAME=' || true
-            ss -ltnp | grep -E ':(80|443|3005|3006|4186|4190)([[:space:]]|$)' || true
-            PM2_HOME=/root/.pm2 pm2 list || true
-            grep -A8 -F 'location ^~ /api/' "$CONF" || true
-
-            echo '=== REMOVE_LEGACY_EDGE ==='
             docker rm -f voiceflow-proxy voiceflow-emergency-proxy >/dev/null 2>&1 || true
-            pkill -9 -f '/opt/voiceflow-proxy' 2>/dev/null || true
-            sleep 1
-
-            echo '=== ENSURE_FULL_CORE_ROUTE ==='
             test -f "$CONF"
             if grep -A8 -F 'location ^~ /api/' "$CONF" | grep -qF 'proxy_pass http://127.0.0.1:3005;'; then
               sed -i '/location \^~ \/api\//,/^[[:space:]]*}/ s#proxy_pass http://127.0.0.1:3005;#proxy_pass http://127.0.0.1:4190;#' "$CONF"
@@ -61,7 +48,6 @@ jobs:
             node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/full-health-$RUN_ID.json
             rm -f /tmp/full-health-$RUN_ID.json
 
-            echo '=== RESTORE_SYSTEM_NGINX ==='
             nginx -t
             systemctl restart nginx
             ready=0
@@ -73,6 +59,7 @@ jobs:
             node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!d.ok||d.service!=='voiceflow'||d.version!=='2.0.0')process.exit(1)" /tmp/public-health-$RUN_ID.json
             rm -f /tmp/public-health-$RUN_ID.json
             ss -ltnp | grep -E '0\.0\.0\.0:(80|443)' | grep -q nginx
+            ! docker inspect voiceflow-proxy >/dev/null 2>&1
             test "$(sha256sum /opt/star45/voiceflow-runtime-public/app.js | awk '{print $1}')" = ce08604d3b31af087bd9054768e44e38291b584a27434872aa346e35c2f4ec04
             test "$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' http://127.0.0.1:3006/api/health)" = 200
             printf 'status=PASS\nlegacy_proxy=removed\nnginx=systemd\napi_upstream=127.0.0.1:4190\nrollback_config=%s\n' "$BACKUP/voice.star45.net.before" > "$BACKUP/README.txt"
@@ -82,7 +69,7 @@ jobs:
             echo 'LOCAL_VERIFICATION=PASS'
             echo "BACKUP=$BACKUP"
 
-      - name: Verify externally after edge restoration
+      - name: Verify externally after restoration
         shell: bash
         run: |
           set -euo pipefail
