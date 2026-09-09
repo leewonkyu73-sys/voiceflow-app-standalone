@@ -71,6 +71,27 @@ export function meetingDecisionToNow(decision = {}, meta = {}) {
   return mapped;
 }
 
+export function voiceChatToNowDraft(message = {}, meta = {}) {
+  const text = clean(message.text || message.content || message.message, 8000);
+  if (!text) throw new Error('chat_text_required');
+  const sourceId = clean(message.id || message.message_id || `${meta.room_id || 'chat'}:${meta.sequence || 0}`, 200);
+  return {
+    kind: 'draft',
+    path: '/v1/intake/chat',
+    payload: {
+      text,
+      organization_id: clean(meta.organization_id || message.organization_id, 200) || undefined,
+      source_app: DEFAULT_SOURCE_APP,
+      source_object_type: 'chat_message',
+      source_object_id: sourceId,
+      metadata: {
+        room_id: clean(meta.room_id || message.room_id, 200) || null,
+        sender_id: clean(message.sender_id || meta.sender_id, 200) || null
+      }
+    }
+  };
+}
+
 function assertBaseUrl(baseUrl) {
   const url = new URL(String(baseUrl || ''));
   const local = ['127.0.0.1', 'localhost'].includes(url.hostname);
@@ -78,29 +99,14 @@ function assertBaseUrl(baseUrl) {
   return url.origin;
 }
 
-export async function sendConfirmedToNow({
-  baseUrl,
-  item,
-  confirmed = false,
-  authorization = '',
-  organizationId = '',
-  fetchImpl = fetch
-} = {}) {
-  if (confirmed !== true) throw new Error('confirmation_required');
+async function postNow({baseUrl,item,authorization='',organizationId='',fetchImpl=fetch}) {
   if (!item?.path || !item?.payload) throw new Error('now_item_required');
   const origin = assertBaseUrl(baseUrl);
   const headers = {'content-type': 'application/json', accept: 'application/json'};
   if (authorization) headers.authorization = authorization.startsWith('Bearer ') ? authorization : `Bearer ${authorization}`;
   if (organizationId) headers['x-star45-organization'] = String(organizationId);
-  if (item.payload.source_object_id) {
-    headers['x-star45-idempotency-key'] = `voice:${item.payload.source_object_type}:${item.payload.source_object_id}`.slice(0, 240);
-  }
-  const response = await fetchImpl(`${origin}${item.path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(item.payload),
-    signal: AbortSignal.timeout(7000)
-  });
+  if (item.payload.source_object_id) headers['x-star45-idempotency-key'] = `voice:${item.payload.source_object_type}:${item.payload.source_object_id}`.slice(0, 240);
+  const response = await fetchImpl(`${origin}${item.path}`, {method:'POST',headers,body:JSON.stringify(item.payload),signal:AbortSignal.timeout(7000)});
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data.error || `now_http_${response.status}`);
@@ -111,6 +117,18 @@ export async function sendConfirmedToNow({
   return data;
 }
 
+export async function sendConfirmedToNow({baseUrl,item,confirmed=false,authorization='',organizationId='',fetchImpl=fetch} = {}) {
+  if (confirmed !== true) throw new Error('confirmation_required');
+  if (item?.kind === 'draft') throw new Error('use_chat_draft_bridge');
+  return postNow({baseUrl,item,authorization,organizationId,fetchImpl});
+}
+
+export async function sendRequestedChatDraftToNow({baseUrl,item,requested=false,authorization='',organizationId='',fetchImpl=fetch} = {}) {
+  if (requested !== true) throw new Error('user_request_required');
+  if (item?.kind !== 'draft' || item?.path !== '/v1/intake/chat') throw new Error('chat_draft_required');
+  return postNow({baseUrl,item,authorization,organizationId,fetchImpl});
+}
+
 export function nowIntegrationStatus(env = process.env) {
   const baseUrl = clean(env.STAR45_NOW_BASE_URL, 500);
   return {
@@ -118,6 +136,7 @@ export function nowIntegrationStatus(env = process.env) {
     configured: !!baseUrl,
     base_url: baseUrl,
     mode: 'api_only',
+    chat_mode: 'opt_in_draft_only',
     direct_database_access: false,
     automatic_external_send: false
   };
