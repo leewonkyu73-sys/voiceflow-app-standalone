@@ -1,0 +1,30 @@
+name: STAR45 NOW Integration Preview
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/star45-now/**'
+      - '.github/workflows/now-integration-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax check
+        run: node --check integrations/star45-now/adapter.mjs
+      - name: Voice to NOW contract tests
+        run: node --test integrations/star45-now/adapter.test.mjs
+      - name: Production isolation guard
+        run: |
+          grep -q "confirmation_required" integrations/star45-now/adapter.mjs
+          grep -q "direct_database_access: false" integrations/star45-now/adapter.mjs
+          grep -q "automatic_external_send: false" integrations/star45-now/adapter.mjs
+          ! grep -R -E "postgres(ql)?://|PGPASSWORD|SSH_KEY|PRIVATE_KEY" integrations/star45-now
