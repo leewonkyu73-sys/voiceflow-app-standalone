@@ -29,19 +29,19 @@ jobs:
             SEC=/opt/star45/secrets
             GNUPGHOME=$SEC/doitai-migration-gnupg
             PUB=$SEC/doitai-migration-public.asc
-            UID='DOITAI Migration <doitai-migration@star45.local>'
+            KEY_IDENTITY='DOITAI Migration <doitai-migration@star45.local>'
             mkdir -p "$SEC" "$GNUPGHOME"
             chmod 700 "$SEC" "$GNUPGHOME"
             export GNUPGHOME
             command -v gpg >/dev/null
-            if ! gpg --batch --list-secret-keys "$UID" >/dev/null 2>&1; then
-              gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key "$UID" rsa3072 cert 1d
-              FPR=$(gpg --batch --with-colons --list-secret-keys "$UID" | awk -F: '/^fpr:/ {print $10; exit}')
+            if ! gpg --batch --list-secret-keys "$KEY_IDENTITY" >/dev/null 2>&1; then
+              gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key "$KEY_IDENTITY" rsa3072 cert 1d
+              FPR=$(gpg --batch --with-colons --list-secret-keys "$KEY_IDENTITY" | awk -F: '/^fpr:/ {print $10; exit}')
               test -n "$FPR"
               gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$FPR" rsa3072 encr 1d
             fi
-            FPR=$(gpg --batch --with-colons --list-secret-keys "$UID" | awk -F: '/^fpr:/ {print $10; exit}')
-            gpg --batch --armor --export "$UID" > "$PUB"
+            FPR=$(gpg --batch --with-colons --list-secret-keys "$KEY_IDENTITY" | awk -F: '/^fpr:/ {print $10; exit}')
+            gpg --batch --armor --export "$KEY_IDENTITY" > "$PUB"
             chmod 644 "$PUB"
             test -s "$PUB"
             echo "DOITAI_MIGRATION_GPG_FINGERPRINT=$FPR"
