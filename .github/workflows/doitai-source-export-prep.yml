@@ -28,7 +28,8 @@ jobs:
             set -eu
             SEC=/opt/star45/secrets
             GNUPGHOME=$SEC/doitai-migration-gnupg
-            PUB=$SEC/doitai-migration-public.asc
+            PUB_ASC=$SEC/doitai-migration-public.asc
+            PUB_BIN=$SEC/doitai-migration-public.gpg
             KEY_IDENTITY='DOITAI Migration <doitai-migration@star45.local>'
             mkdir -p "$SEC" "$GNUPGHOME"
             chmod 700 "$SEC" "$GNUPGHOME"
@@ -41,11 +42,10 @@ jobs:
               gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$FPR" rsa3072 encr 1d
             fi
             FPR=$(gpg --batch --with-colons --list-secret-keys "$KEY_IDENTITY" | awk -F: '/^fpr:/ {print $10; exit}')
-            gpg --batch --armor --export "$KEY_IDENTITY" > "$PUB"
-            chmod 644 "$PUB"
-            test -s "$PUB"
+            gpg --batch --armor --export "$KEY_IDENTITY" > "$PUB_ASC"
+            gpg --batch --export "$KEY_IDENTITY" > "$PUB_BIN"
+            chmod 644 "$PUB_ASC" "$PUB_BIN"
+            test -s "$PUB_BIN"
             echo "DOITAI_MIGRATION_GPG_FINGERPRINT=$FPR"
-            echo 'DOITAI_MIGRATION_PUBLIC_KEY_BEGIN'
-            cat "$PUB"
-            echo 'DOITAI_MIGRATION_PUBLIC_KEY_END'
+            echo "DOITAI_MIGRATION_PUBLIC_KEY_B64=$(base64 -w0 "$PUB_BIN")"
             echo DOITAI_SOURCE_EXPORT_PREP_PASS
