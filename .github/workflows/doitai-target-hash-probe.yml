@@ -22,22 +22,12 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: 22
           timeout: 90s
-          script_stop: true
+          script_stop: false
           script: |
             set -eu
             PG=star45-core-postgres
             DB=star45_doitai
             PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
-            docker exec "$PG" psql -U "$PGU" -d "$DB" -At -F '|' -c "
-              select 'profiles',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.profiles union all
-              select 'app_connections',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_connections union all
-              select 'app_intro_preferences',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_intro_preferences union all
-              select 'app_intros',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_intros union all
-              select 'attendance_records',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.attendance_records union all
-              select 'api_integration_settings',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.api_integration_settings union all
-              select 'capture_configs',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.capture_configs union all
-              select 'cash_ledger_accounts',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.cash_ledger_accounts union all
-              select 'cash_ledger_bank_accounts',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.cash_ledger_bank_accounts union all
-              select 'clients',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.clients
-              order by 1;"
+            SQL="select 'profiles',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.profiles union all select 'app_connections',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_connections union all select 'app_intro_preferences',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_intro_preferences union all select 'app_intros',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.app_intros union all select 'attendance_records',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.attendance_records union all select 'api_integration_settings',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.api_integration_settings union all select 'capture_configs',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.capture_configs union all select 'cash_ledger_accounts',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.cash_ledger_accounts union all select 'cash_ledger_bank_accounts',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.cash_ledger_bank_accounts union all select 'clients',count(*),md5(coalesce(string_agg(id::text,',' order by id),'')) from public.clients order by 1"
+            docker exec "$PG" psql -U "$PGU" -d "$DB" -At -F '|' -c "$SQL"
             echo DOITAI_TARGET_HASH_PROBE_PASS
