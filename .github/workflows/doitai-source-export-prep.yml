@@ -13,7 +13,7 @@ permissions:
 jobs:
   prep:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     steps:
       - uses: appleboy/ssh-action@v1.0.3
         with:
@@ -23,26 +23,29 @@ jobs:
           port: 22
           timeout: 90s
           script_stop: false
-          command_timeout: 4m
+          command_timeout: 6m
           script: |
             set -eu
             SEC=/opt/star45/secrets
-            TOKEN_FILE=$SEC/doitai-source-export.token
-            mkdir -p "$SEC"
-            chmod 700 "$SEC"
-            if [ ! -f "$TOKEN_FILE" ]; then
-              umask 077
-              openssl rand -hex 32 > "$TOKEN_FILE"
+            GNUPGHOME=$SEC/doitai-migration-gnupg
+            PUB=$SEC/doitai-migration-public.asc
+            UID='DOITAI Migration <doitai-migration@star45.local>'
+            mkdir -p "$SEC" "$GNUPGHOME"
+            chmod 700 "$SEC" "$GNUPGHOME"
+            export GNUPGHOME
+            command -v gpg >/dev/null
+            if ! gpg --batch --list-secret-keys "$UID" >/dev/null 2>&1; then
+              gpg --batch --pinentry-mode loopback --passphrase '' --quick-generate-key "$UID" rsa3072 cert 1d
+              FPR=$(gpg --batch --with-colons --list-secret-keys "$UID" | awk -F: '/^fpr:/ {print $10; exit}')
+              test -n "$FPR"
+              gpg --batch --pinentry-mode loopback --passphrase '' --quick-add-key "$FPR" rsa3072 encr 1d
             fi
-            chmod 600 "$TOKEN_FILE"
-            HASH=$(sha256sum "$TOKEN_FILE" | awk '{print $1}')
-            test "${#HASH}" -eq 64
-            command -v openssl >/dev/null
-            if command -v gpg >/dev/null 2>&1; then
-              echo DOITAI_GPG_AVAILABLE
-              gpg --version | head -n 1
-            else
-              echo DOITAI_GPG_MISSING
-            fi
-            echo "DOITAI_SOURCE_EXPORT_TOKEN_SHA256=$HASH"
+            FPR=$(gpg --batch --with-colons --list-secret-keys "$UID" | awk -F: '/^fpr:/ {print $10; exit}')
+            gpg --batch --armor --export "$UID" > "$PUB"
+            chmod 644 "$PUB"
+            test -s "$PUB"
+            echo "DOITAI_MIGRATION_GPG_FINGERPRINT=$FPR"
+            echo 'DOITAI_MIGRATION_PUBLIC_KEY_BEGIN'
+            cat "$PUB"
+            echo 'DOITAI_MIGRATION_PUBLIC_KEY_END'
             echo DOITAI_SOURCE_EXPORT_PREP_PASS
