@@ -21,27 +21,14 @@ jobs:
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
-          script_stop: true
+          script_stop: false
+          timeout: 90s
           script: |
-            set -e
+            set -eu
             echo DOITAI_BRIDGE_SSH_PASS
             echo '=== VPS GITHUB ACCESS PROBE ==='
-            if GIT_TERMINAL_PROMPT=0 git ls-remote git@github.com:leewonkyu73-sys/doitai.git HEAD >/dev/null 2>&1; then
-              echo DOITAI_GIT_SSH_ACCESS_PASS
-            else
-              echo DOITAI_GIT_SSH_ACCESS_FAIL
-            fi
-            if GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/leewonkyu73-sys/doitai.git HEAD >/dev/null 2>&1; then
-              echo DOITAI_GIT_HTTPS_ACCESS_PASS
-            else
-              echo DOITAI_GIT_HTTPS_ACCESS_FAIL
-            fi
-            if command -v gh >/dev/null 2>&1; then
-              if gh auth status >/dev/null 2>&1; then echo DOITAI_GH_AUTH_PASS; else echo DOITAI_GH_AUTH_FAIL; fi
-            else
-              echo DOITAI_GH_NOT_INSTALLED
-            fi
+            GIT_TERMINAL_PROMPT=0 git ls-remote git@github.com:leewonkyu73-sys/doitai.git HEAD >/dev/null 2>&1 && echo DOITAI_GIT_SSH_ACCESS_PASS
+            GIT_TERMINAL_PROMPT=0 git ls-remote git@github.com:leewonkyu73-sys/voiceflow-app-standalone.git HEAD >/dev/null 2>&1 && echo DOITAI_BRIDGE_REPO_SSH_ACCESS_PASS
             echo '=== RUNTIME ==='
-            docker version --format 'server={{.Server.Version}}' || true
-            docker ps --format 'name={{.Names}} image={{.Image}} status={{.Status}}' | head -n 40
-            ss -ltn 2>/dev/null | grep -E ':(4608|4609)\b' || true
+            docker version --format 'server={{.Server.Version}}'
+            docker ps --filter name=star45-doitai --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
