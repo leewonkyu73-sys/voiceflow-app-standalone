@@ -38,6 +38,7 @@ jobs:
             GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
             export GNUPGHOME
             cleanup() {
+              chmod 600 "$JSON" 2>/dev/null || true
               rm -f "$BIN" "$JSON"
               rm -rf "$BRIDGE"
             }
@@ -64,12 +65,14 @@ jobs:
             node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(p.table!=='teams'||p.expected_count!==6||!Array.isArray(p.rows)||p.rows.length!==6)process.exit(1)" "$JSON"
             echo DOITAI_ENCRYPTED_TEAMS_DECRYPT_PASS
 
+            chmod 644 "$JSON"
             docker run --rm --network star45-core-private \
               --env-file /opt/star45/secrets/doitai-migration.env \
               -v "$APP/server/tools:/app/server/tools:ro" \
               -v "$JSON:/payload.json:ro" \
               star45-doitai:vps-direct \
               node /app/server/tools/import-public-data.mjs /payload.json
+            chmod 600 "$JSON"
 
             after=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atc 'select count(*) from public.teams;')
             test "$after" = 6
