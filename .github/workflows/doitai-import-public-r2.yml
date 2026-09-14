@@ -1,0 +1,54 @@
+name: DOITAI Import Public R2
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-import-public-r2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 7m
+          script: |
+            set -eu
+            BRIDGE=/tmp/doitai-migration-bridge
+            CODE=/tmp/doitai-code
+            APP=/opt/star45/doitai
+            PG=star45-core-postgres
+            DB=star45_doitai
+            ENC=$BRIDGE/.doitai-migration/public-r2.pgp.b64
+            BIN=/tmp/doitai-public-r2.pgp
+            JSON=/tmp/doitai-public-r2.json
+            GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            export GNUPGHOME
+            cleanup() { chmod 600 "$JSON" 2>/dev/null || true; rm -f "$BIN" "$JSON"; rm -rf "$BRIDGE" "$CODE"; }
+            trap cleanup EXIT
+            git clone --depth=1 --branch probe/doitai-vps-access-20260914 git@github.com:leewonkyu73-sys/voiceflow-app-standalone.git "$BRIDGE" >/dev/null 2>&1
+            git clone --depth=1 --branch vps-direct-migration-20260914 git@github.com:leewonkyu73-sys/doitai.git "$CODE" >/dev/null 2>&1
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            stamp=$(date -u +%Y%m%dT%H%M%SZ)
+            mkdir -p "$APP/backups"
+            docker exec "$PG" pg_dump -U "$PGU" -Fc "$DB" > "$APP/backups/pre-public-r2-${stamp}.dump"
+            test -s "$APP/backups/pre-public-r2-${stamp}.dump"
+            tr -d '[:space:]' < "$ENC" | base64 -d > "$BIN"
+            gpg --batch --quiet --decrypt "$BIN" > "$JSON"
+            chmod 644 "$JSON"
+            docker run --rm --network star45-core-private --env-file /opt/star45/secrets/doitai-migration.env -v "$CODE/server/tools:/app/server/tools:ro" -v "$JSON:/payload.json:ro" star45-doitai:vps-direct node /app/server/tools/import-public-data.mjs /payload.json
+            chmod 600 "$JSON"
+            for spec in api_integration_settings:3 capture_configs:1 cash_ledger_accounts:14 cash_ledger_bank_accounts:7 clients:2; do table=${spec%%:*}; expected=${spec##*:}; actual=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atc "select count(*) from public.$table;"); test "$actual" = "$expected"; done
+            echo DOITAI_PUBLIC_R2_IMPORT_PASS
