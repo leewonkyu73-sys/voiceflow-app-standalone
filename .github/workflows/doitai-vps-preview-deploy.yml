@@ -21,6 +21,7 @@ jobs:
           username: root
           key: ${{ secrets.SSH_KEY }}
           port: 22
+          timeout: 90s
           script_stop: true
           command_timeout: 20m
           script: |
@@ -28,7 +29,7 @@ jobs:
             APP_DIR=/opt/star45/doitai
             REPO=git@github.com:leewonkyu73-sys/doitai.git
             BRANCH=vps-direct-migration-20260914
-            EXPECTED=35495f3ac217a75ac7157b07add6412c67cdcdac
+            EXPECTED=e6d2474ccbc3f7285f4f6a82146956afd2a0eb52
 
             echo '=== DOITAI PREVIEW BASELINE ==='
             docker network inspect star45-core-private >/dev/null 2>&1
