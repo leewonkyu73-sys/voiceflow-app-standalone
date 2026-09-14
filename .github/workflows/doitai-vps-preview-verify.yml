@@ -27,21 +27,15 @@ jobs:
           script: |
             set -u
             C=star45-doitai
-            echo '=== CONTAINER ==='
-            docker ps -a --filter name="^/${C}$" --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
-            echo '=== PORT BINDINGS ==='
-            docker inspect "$C" -f 'ports={{json .NetworkSettings.Ports}} bindings={{json .HostConfig.PortBindings}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null || true
-            echo '=== COMPOSE SOURCE ==='
-            sed -n '1,160p' /opt/star45/doitai/compose.vps.yml 2>/dev/null || true
-            echo '=== COMPOSE CONFIG ==='
-            cd /opt/star45/doitai 2>/dev/null && STAR45_DB_NETWORK=star45-core-private docker compose -f compose.vps.yml config 2>/dev/null || true
-            echo '=== HOST HEALTH ==='
-            code=$(curl -sS -o /tmp/doitai-host-health.json -w '%{http_code}' --max-time 4 http://127.0.0.1:4608/health 2>/dev/null || true)
-            echo "host_health_http=$code"
-            cat /tmp/doitai-host-health.json 2>/dev/null || true
-            echo
-            echo '=== CONTAINER HEALTH ==='
-            docker exec "$C" sh -lc 'node -e "fetch(\"http://127.0.0.1:4608/health\").then(async r=>{console.log(\"container_health_http=\"+r.status); console.log(await r.text())}).catch(e=>{console.error(String(e));process.exit(1)})"' 2>/dev/null || true
-            echo '=== APP LOG TAIL ==='
-            docker logs --tail=80 "$C" 2>&1 || true
-            echo DOITAI_PREVIEW_VERIFY_READONLY_DONE
+            echo '=== NETWORK FLAGS ==='
+            docker network inspect star45-core-private -f 'core_internal={{.Internal}} core_driver={{.Driver}}' 2>/dev/null || true
+            docker network inspect star45-network -f 'shared_internal={{.Internal}} shared_driver={{.Driver}}' 2>/dev/null || true
+            echo '=== COMPARISON NETWORKS ==='
+            for c in star45-doitai star45-platform-admin star45-schedule star45-finance-api; do
+              docker inspect "$c" -f 'name={{.Name}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}} ports={{json .NetworkSettings.Ports}}' 2>/dev/null || true
+            done
+            echo '=== DOITAI INTERNAL HEALTH ==='
+            docker exec "$C" sh -lc 'node -e "fetch(\"http://127.0.0.1:4608/health\").then(async r=>{const j=await r.json(); console.log(JSON.stringify({status:r.status,ok:j.ok,database:j.database,supabase:j.supabase,deploymentCenter:j.deploymentCenter,remoteDesktop:j.remoteDesktop,db:j.db}))}).catch(e=>{console.error(String(e));process.exit(1)})"' 2>/dev/null || true
+            echo '=== HOST PORT ==='
+            ss -ltn 2>/dev/null | grep -E ':4608\b' || true
+            echo DOITAI_PREVIEW_VERIFY_SAFE_DONE
