@@ -29,7 +29,7 @@ jobs:
             APP_DIR=/opt/star45/doitai
             REPO=git@github.com:leewonkyu73-sys/doitai.git
             BRANCH=vps-direct-migration-20260914
-            EXPECTED=90bcf6887e96aab403e2d65d4114a8a5f603d8d4
+            EXPECTED=fe2bfc26222f8799383eb408987c0b1062fa1588
             PG=star45-core-postgres
             NET=star45-core-private
 
@@ -89,7 +89,10 @@ jobs:
             sh scripts/vps-direct-deploy.sh
 
             echo '=== VERIFY PREVIEW ==='
-            curl -fsS http://127.0.0.1:4608/health
+            curl -fsS http://127.0.0.1:4608/health >/tmp/doitai-health.json
+            grep -q '"ok":true' /tmp/doitai-health.json
+            grep -q '"database":"postgresql"' /tmp/doitai-health.json
+            grep -q '"supabase":false' /tmp/doitai-health.json
             docker ps --filter name=star45-doitai --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
             docker inspect star45-doitai -f 'networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}} ports={{json .NetworkSettings.Ports}}'
             docker exec "$PG" sh -lc 'U=${POSTGRES_USER:-postgres}; D=${POSTGRES_DB:-postgres}; psql -U "$U" -d "$D" -Atc "select datname from pg_database where datname='"'"'star45_doitai'"'"';"'
