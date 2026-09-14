@@ -1,0 +1,49 @@
+name: DOITAI Migration Compress Probe
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-migration-compress-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -eu
+            GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            export GNUPGHOME
+            B=/tmp/doitai-compress-probe.b64
+            P=/tmp/doitai-compress-probe.pgp
+            O=/tmp/doitai-compress-probe.out
+            trap 'rm -f "$B" "$P" "$O"' EXIT
+            cat > "$B" <<'B64'
+            wcDMA/frc3ner+93AQwAlYbecnA/mfkxXgQTbXAb03hp+vuW/8wrdkuEVz01CoWEWoukXlZVIaBe
+            4SXz1e9zxSWurtdnPeZcGSUGrqYcMhs74n+Pp1VR+T1uRQ2CBnUxPEFLcJDt5MRRuVLkvhvX3M+B
+            8gJrjOhBEah03iHsjxTJihnEF4SZ1gj0gOaqz7CgYV9jCJHj585noHwxaSZu+SPrCda4rse+pymA
+            cYEUztevEnfnvCCWQyqysjSrhSEgLEXSqqCaGG3drAMlpjZVrd+TpEM8zBbd/mHk8UKST2ubSH6M
+            9LVB6pmHCNXDZhpRGxZktRFpXXl7bdNgXICOQ5pfqa6X6l8Wt1eVif5hF9hbXAqo6X8LfYU0fODx
+            twJlglA183cUTdvdhLxz2w+vX5ZqwuZ/cHg+B0zppOfjc7XesJ7F5N7mmG/4+E/r3V5PleHQuKC8
+            yW4s5D+oKrI8vuVnifDfjgUYhCKVh3j1lQeYTZS32hDQqQKAZHFwPwkZTENq4HnJ89WiCMOWUepd
+            0lgBBxAGGqsyVB1N/6RSwIB+3O4KtsFEITc6HiZLqa0QJ/D9dVKXlDeMkK9pNzeB6xeL3wUbT236
+            t5XCv2zOTzWYC0bpwBbCEerOp5N/ehoE45vIkg+JjrME
+            B64
+            tr -d '[:space:]' < "$B" | base64 -d > "$P"
+            gpg --batch --quiet --decrypt "$P" > "$O"
+            test "$(cat "$O")" = "$(printf 'DOITAI-COMPRESS-PROBE-%.0s' $(seq 1 50))"
+            echo DOITAI_MIGRATION_COMPRESS_PROBE_PASS
