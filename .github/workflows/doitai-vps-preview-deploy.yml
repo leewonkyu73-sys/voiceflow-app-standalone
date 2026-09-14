@@ -30,24 +30,33 @@ jobs:
             REPO=git@github.com:leewonkyu73-sys/doitai.git
             BRANCH=vps-direct-migration-20260914
             EXPECTED=e6d2474ccbc3f7285f4f6a82146956afd2a0eb52
+            PG=star45-core-postgres
+            NET=star45-core-private
 
             echo '=== DOITAI PREVIEW BASELINE ==='
-            docker network inspect star45-core-private >/dev/null 2>&1
-            docker inspect star45-core-postgres >/dev/null 2>&1
-            docker exec star45-core-postgres pg_isready >/dev/null
+            if docker network inspect "$NET" >/dev/null 2>&1; then echo 'BASELINE_NETWORK_PASS'; else echo 'BASELINE_NETWORK_FAIL'; exit 31; fi
+            if docker inspect "$PG" >/dev/null 2>&1; then echo 'BASELINE_POSTGRES_CONTAINER_PASS'; else echo 'BASELINE_POSTGRES_CONTAINER_FAIL'; exit 32; fi
+            if docker ps --format '{{.Names}}' | grep -qx "$PG"; then echo 'BASELINE_POSTGRES_RUNNING_PASS'; else echo 'BASELINE_POSTGRES_RUNNING_FAIL'; exit 33; fi
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            PGD=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_DB:-postgres}"')
+            if docker exec "$PG" pg_isready -U "$PGU" -d "$PGD" >/dev/null 2>&1; then echo 'BASELINE_POSTGRES_READY_PASS'; else echo 'BASELINE_POSTGRES_READY_FAIL'; exit 34; fi
             if ss -ltn 2>/dev/null | grep -Eq '127\.0\.0\.1:4608\b'; then
               owner=$(docker ps --format '{{.Names}}|{{.Ports}}' | grep -E '127\.0\.0\.1:4608->' | cut -d'|' -f1 || true)
               if [ "$owner" != star45-doitai ]; then
-                echo 'port_4608_already_in_use_by_other_service'
+                echo 'BASELINE_PORT_4608_CONFLICT'
                 ss -ltnp 2>/dev/null | grep -E ':4608\b' || true
-                exit 21
+                exit 35
               fi
+              echo 'BASELINE_EXISTING_DOITAI_PORT_PASS'
+            else
+              echo 'BASELINE_PORT_4608_FREE_PASS'
             fi
 
+            echo '=== DOITAI SOURCE CHECKOUT ==='
             if [ -e "$APP_DIR/.git" ]; then
               cd "$APP_DIR"
               origin=$(git remote get-url origin)
-              printf '%s\n' "$origin" | grep -Eq 'github\.com[:/]leewonkyu73-sys/doitai(\.git)?$'
+              if printf '%s\n' "$origin" | grep -Eq 'github\.com[:/]leewonkyu73-sys/doitai(\.git)?$'; then echo 'SOURCE_ORIGIN_PASS'; else echo 'SOURCE_ORIGIN_FAIL'; exit 36; fi
               old=$(git rev-parse HEAD)
               echo "existing_repo_commit=$old"
               printf '%s\n' "$old" > /opt/star45/doitai-predeploy-commit.txt
@@ -55,9 +64,9 @@ jobs:
               git checkout -B "$BRANCH" "origin/$BRANCH"
               git reset --hard "origin/$BRANCH"
             elif [ -e "$APP_DIR" ] && [ "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
-              echo 'existing_non_git_app_dir_detected'
+              echo 'SOURCE_EXISTING_NON_GIT_DIR_FAIL'
               find "$APP_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | head -n 40
-              exit 22
+              exit 37
             else
               mkdir -p /opt/star45
               rm -rf "$APP_DIR"
@@ -67,7 +76,7 @@ jobs:
 
             actual=$(git rev-parse HEAD)
             echo "checked_out_commit=$actual"
-            [ "$actual" = "$EXPECTED" ]
+            if [ "$actual" = "$EXPECTED" ]; then echo 'SOURCE_COMMIT_PASS'; else echo 'SOURCE_COMMIT_FAIL'; exit 38; fi
 
             echo '=== RUN DIRECT VPS DEPLOY ==='
             sh scripts/vps-direct-deploy.sh
@@ -75,5 +84,5 @@ jobs:
             echo '=== VERIFY PREVIEW ==='
             curl -fsS http://127.0.0.1:4608/health
             docker ps --filter name=star45-doitai --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
-            docker exec star45-core-postgres sh -lc 'U=${POSTGRES_USER:-postgres}; D=${POSTGRES_DB:-postgres}; psql -U "$U" -d "$D" -Atc "select datname from pg_database where datname='"'"'star45_doitai'"'"';"'
+            docker exec "$PG" sh -lc 'U=${POSTGRES_USER:-postgres}; D=${POSTGRES_DB:-postgres}; psql -U "$U" -d "$D" -Atc "select datname from pg_database where datname='"'"'star45_doitai'"'"';"'
             echo DOITAI_GITHUB_TO_VPS_PREVIEW_PASS
