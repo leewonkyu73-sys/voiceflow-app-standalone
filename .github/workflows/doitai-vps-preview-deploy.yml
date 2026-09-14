@@ -1,0 +1,72 @@
+name: DOITAI VPS Preview Deploy
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-vps-preview-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -eu
+            APP_DIR=/opt/star45/doitai
+            REPO=git@github.com:leewonkyu73-sys/doitai.git
+            BRANCH=vps-direct-migration-20260914
+            EXPECTED=54756256ffc99bbe163714ac9b0f4a50b25df2b1
+
+            echo '=== DOITAI PREVIEW BASELINE ==='
+            docker network inspect star45-network >/dev/null 2>&1
+            if ss -ltn 2>/dev/null | grep -Eq '127\.0\.0\.1:4608\b'; then
+              echo 'port_4608_already_in_use'
+              ss -ltnp 2>/dev/null | grep -E ':4608\b' || true
+              exit 21
+            fi
+
+            if [ -e "$APP_DIR/.git" ]; then
+              cd "$APP_DIR"
+              origin=$(git remote get-url origin)
+              printf '%s\n' "$origin" | grep -Eq 'github\.com[:/]leewonkyu73-sys/doitai(\.git)?$'
+              old=$(git rev-parse HEAD)
+              echo "existing_repo_commit=$old"
+              printf '%s\n' "$old" > /opt/star45/doitai-predeploy-commit.txt
+              git fetch origin "$BRANCH"
+              git checkout -B "$BRANCH" "origin/$BRANCH"
+              git reset --hard "origin/$BRANCH"
+            elif [ -e "$APP_DIR" ] && [ "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
+              echo 'existing_non_git_app_dir_detected'
+              find "$APP_DIR" -mindepth 1 -maxdepth 1 -printf '%f\n' | head -n 40
+              exit 22
+            else
+              mkdir -p /opt/star45
+              rm -rf "$APP_DIR"
+              git clone --branch "$BRANCH" --single-branch "$REPO" "$APP_DIR"
+              cd "$APP_DIR"
+            fi
+
+            actual=$(git rev-parse HEAD)
+            echo "checked_out_commit=$actual"
+            [ "$actual" = "$EXPECTED" ]
+
+            echo '=== RUN DIRECT VPS DEPLOY ==='
+            sh scripts/vps-direct-deploy.sh
+
+            echo '=== VERIFY PREVIEW ==='
+            curl -fsS http://127.0.0.1:4608/health
+            docker ps --filter name=star45-doitai --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
+            echo DOITAI_GITHUB_TO_VPS_PREVIEW_PASS
