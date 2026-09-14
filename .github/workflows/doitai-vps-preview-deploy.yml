@@ -28,14 +28,19 @@ jobs:
             APP_DIR=/opt/star45/doitai
             REPO=git@github.com:leewonkyu73-sys/doitai.git
             BRANCH=vps-direct-migration-20260914
-            EXPECTED=54756256ffc99bbe163714ac9b0f4a50b25df2b1
+            EXPECTED=35495f3ac217a75ac7157b07add6412c67cdcdac
 
             echo '=== DOITAI PREVIEW BASELINE ==='
-            docker network inspect star45-network >/dev/null 2>&1
+            docker network inspect star45-core-private >/dev/null 2>&1
+            docker inspect star45-core-postgres >/dev/null 2>&1
+            docker exec star45-core-postgres pg_isready >/dev/null
             if ss -ltn 2>/dev/null | grep -Eq '127\.0\.0\.1:4608\b'; then
-              echo 'port_4608_already_in_use'
-              ss -ltnp 2>/dev/null | grep -E ':4608\b' || true
-              exit 21
+              owner=$(docker ps --format '{{.Names}}|{{.Ports}}' | grep -E '127\.0\.0\.1:4608->' | cut -d'|' -f1 || true)
+              if [ "$owner" != star45-doitai ]; then
+                echo 'port_4608_already_in_use_by_other_service'
+                ss -ltnp 2>/dev/null | grep -E ':4608\b' || true
+                exit 21
+              fi
             fi
 
             if [ -e "$APP_DIR/.git" ]; then
@@ -69,4 +74,5 @@ jobs:
             echo '=== VERIFY PREVIEW ==='
             curl -fsS http://127.0.0.1:4608/health
             docker ps --filter name=star45-doitai --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
+            docker exec star45-core-postgres sh -lc 'U=${POSTGRES_USER:-postgres}; D=${POSTGRES_DB:-postgres}; psql -U "$U" -d "$D" -Atc "select datname from pg_database where datname='"'"'star45_doitai'"'"';"'
             echo DOITAI_GITHUB_TO_VPS_PREVIEW_PASS
