@@ -1,0 +1,41 @@
+name: DOITAI Target Schema Signature
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-target-schema-signature.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signature:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -eu
+            PG=star45-core-postgres
+            DB=star45_doitai
+            EXPECTED_SIG=c1494aec68f4e52b3b96586193266d85
+            EXPECTED_COLS=978
+            U=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            row=$(docker exec "$PG" psql -U "$U" -d "$DB" -At -F '|' -c "select md5(string_agg(table_name||'|'||ordinal_position||'|'||column_name||'|'||data_type||'|'||udt_name||'|'||is_nullable, E'\\n' order by table_name, ordinal_position)), count(*) from information_schema.columns where table_schema='public';")
+            sig=$(printf '%s' "$row" | cut -d'|' -f1)
+            cols=$(printf '%s' "$row" | cut -d'|' -f2)
+            echo "target_column_count=$cols"
+            echo "target_schema_signature=$sig"
+            test "$cols" = "$EXPECTED_COLS"
+            test "$sig" = "$EXPECTED_SIG"
+            echo DOITAI_TARGET_SCHEMA_MATCH_PASS
