@@ -1,0 +1,44 @@
+name: DOITAI VPS Topology Probe
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-vps-topology-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  topology:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            echo '=== HOST ==='
+            hostname
+            df -h / /opt 2>/dev/null || true
+            echo '=== DOCKER NETWORKS ==='
+            docker network ls --format 'name={{.Name}} driver={{.Driver}} scope={{.Scope}}'
+            echo '=== RUNNING CONTAINERS ==='
+            docker ps --format 'name={{.Names}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+            echo '=== POSTGRES CANDIDATES ==='
+            for c in $(docker ps --format '{{.Names}}|{{.Image}}' | awk -F'|' 'tolower($2) ~ /postgres|timescale/ {print $1}'); do
+              echo "postgres=$c"
+              docker exec "$c" pg_isready 2>/dev/null || true
+              docker inspect -f 'networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$c" || true
+            done
+            echo '=== PORTS 4608 4609 ==='
+            ss -ltnp 2>/dev/null | grep -E ':(4608|4609)\b' || true
+            echo '=== OPT STAR45 TOP LEVEL ==='
+            find /opt/star45 -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort | head -n 100 || true
+            echo DOITAI_VPS_TOPOLOGY_PASS
