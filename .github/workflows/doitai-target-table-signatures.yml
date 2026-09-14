@@ -1,0 +1,33 @@
+name: DOITAI Target Table Signatures
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-target-table-signatures.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signatures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -eu
+            PG=star45-core-postgres
+            DB=star45_doitai
+            U=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            docker exec "$PG" psql -U "$U" -d "$DB" -At -F '|' -c "select table_name, count(*), md5(string_agg(ordinal_position||'|'||column_name||'|'||data_type||'|'||udt_name||'|'||is_nullable, E'\\n' order by ordinal_position)) from information_schema.columns where table_schema='public' group by table_name order by table_name;"
+            echo DOITAI_TARGET_TABLE_SIGNATURES_PASS
