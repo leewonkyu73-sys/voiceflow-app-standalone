@@ -1,0 +1,44 @@
+name: DOITAI Create CMS Migration Key
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-create-cms-key.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: true
+          command_timeout: 3m
+          script: |
+            set -eu
+            D=/opt/star45/secrets/doitai-migration-cms
+            mkdir -p "$D"
+            chmod 700 "$D"
+            if [ ! -s "$D/key.pem" ] || [ ! -s "$D/cert.pem" ]; then
+              umask 077
+              openssl req -x509 -newkey rsa:4096 -sha256 -days 30 -nodes \
+                -subj '/CN=DOITAI Migration One-Time/' \
+                -keyout "$D/key.pem" -out "$D/cert.pem" >/dev/null 2>&1
+            fi
+            chmod 600 "$D/key.pem" "$D/cert.pem"
+            test -s "$D/key.pem" && test -s "$D/cert.pem"
+            openssl x509 -in "$D/cert.pem" -noout -checkend 86400 >/dev/null
+            echo DOITAI_CMS_KEY_READY
+            printf 'CERT_B64='
+            base64 -w 0 "$D/cert.pem"
+            printf '\n'
