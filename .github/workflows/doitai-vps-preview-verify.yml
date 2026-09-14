@@ -25,17 +25,28 @@ jobs:
           script_stop: false
           command_timeout: 4m
           script: |
-            set -u
+            set -eu
             C=star45-doitai
+            EXPECTED=90bcf6887e96aab403e2d65d4114a8a5f603d8d4
+            echo '=== SOURCE ==='
+            cd /opt/star45/doitai
+            test "$(git rev-parse HEAD)" = "$EXPECTED"
+            echo DOITAI_SOURCE_COMMIT_PASS
             echo '=== NETWORK FLAGS ==='
-            docker network inspect star45-core-private -f 'core_internal={{.Internal}} core_driver={{.Driver}}' 2>/dev/null || true
-            docker network inspect star45-network -f 'shared_internal={{.Internal}} shared_driver={{.Driver}}' 2>/dev/null || true
-            echo '=== COMPARISON NETWORKS ==='
-            for c in star45-doitai star45-platform-admin star45-schedule star45-finance-api; do
-              docker inspect "$c" -f 'name={{.Name}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}} ports={{json .NetworkSettings.Ports}}' 2>/dev/null || true
-            done
-            echo '=== DOITAI INTERNAL HEALTH ==='
-            docker exec "$C" sh -lc 'node -e "fetch(\"http://127.0.0.1:4608/health\").then(async r=>{const j=await r.json(); console.log(JSON.stringify({status:r.status,ok:j.ok,database:j.database,supabase:j.supabase,deploymentCenter:j.deploymentCenter,remoteDesktop:j.remoteDesktop,db:j.db}))}).catch(e=>{console.error(String(e));process.exit(1)})"' 2>/dev/null || true
+            docker network inspect star45-core-private -f 'core_internal={{.Internal}} core_driver={{.Driver}}' 2>/dev/null
+            docker network inspect star45-network -f 'shared_internal={{.Internal}} shared_driver={{.Driver}}' 2>/dev/null
+            docker inspect "$C" -f 'name={{.Name}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}} ports={{json .NetworkSettings.Ports}}'
+            echo '=== HOST HEALTH ==='
+            curl -fsS http://127.0.0.1:4608/health >/tmp/doitai-safe-health.json
+            grep -q '"ok":true' /tmp/doitai-safe-health.json
+            grep -q '"database":"postgresql"' /tmp/doitai-safe-health.json
+            grep -q '"supabase":false' /tmp/doitai-safe-health.json
+            echo DOITAI_HOST_HEALTH_PASS
+            echo '=== APP SHELL ==='
+            curl -fsS http://127.0.0.1:4608/ >/tmp/doitai-safe-root.html
+            grep -qi '<div id="root"' /tmp/doitai-safe-root.html
+            echo DOITAI_APP_SHELL_PASS
             echo '=== HOST PORT ==='
-            ss -ltn 2>/dev/null | grep -E ':4608\b' || true
-            echo DOITAI_PREVIEW_VERIFY_SAFE_DONE
+            ss -ltn | grep -E '127\.0\.0\.1:4608\b'
+            ! ss -ltn | grep -Eq '0\.0\.0\.0:4608|\[::\]:4608'
+            echo DOITAI_PREVIEW_VERIFY_SAFE_PASS
