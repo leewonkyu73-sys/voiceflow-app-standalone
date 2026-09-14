@@ -26,7 +26,6 @@ jobs:
           command_timeout: 4m
           script: |
             set -eu
-            APP=/opt/star45/doitai
             SEC=/opt/star45/secrets
             TOKEN_FILE=$SEC/doitai-source-export.token
             mkdir -p "$SEC"
@@ -38,9 +37,12 @@ jobs:
             chmod 600 "$TOKEN_FILE"
             HASH=$(sha256sum "$TOKEN_FILE" | awk '{print $1}')
             test "${#HASH}" -eq 64
-            cd "$APP"
-            test -f .env
-            grep -q '^VITE_SUPABASE_URL=' .env
-            grep -Eq '^VITE_SUPABASE_(PUBLISHABLE_KEY|ANON_KEY)=' .env
+            command -v openssl >/dev/null
+            if command -v gpg >/dev/null 2>&1; then
+              echo DOITAI_GPG_AVAILABLE
+              gpg --version | head -n 1
+            else
+              echo DOITAI_GPG_MISSING
+            fi
             echo "DOITAI_SOURCE_EXPORT_TOKEN_SHA256=$HASH"
             echo DOITAI_SOURCE_EXPORT_PREP_PASS
