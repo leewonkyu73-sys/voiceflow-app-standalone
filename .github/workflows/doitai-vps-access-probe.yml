@@ -1,0 +1,47 @@
+name: DOITAI VPS Access Probe
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-vps-access-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -e
+            echo DOITAI_BRIDGE_SSH_PASS
+            echo '=== VPS GITHUB ACCESS PROBE ==='
+            if GIT_TERMINAL_PROMPT=0 git ls-remote git@github.com:leewonkyu73-sys/doitai.git HEAD >/dev/null 2>&1; then
+              echo DOITAI_GIT_SSH_ACCESS_PASS
+            else
+              echo DOITAI_GIT_SSH_ACCESS_FAIL
+            fi
+            if GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/leewonkyu73-sys/doitai.git HEAD >/dev/null 2>&1; then
+              echo DOITAI_GIT_HTTPS_ACCESS_PASS
+            else
+              echo DOITAI_GIT_HTTPS_ACCESS_FAIL
+            fi
+            if command -v gh >/dev/null 2>&1; then
+              if gh auth status >/dev/null 2>&1; then echo DOITAI_GH_AUTH_PASS; else echo DOITAI_GH_AUTH_FAIL; fi
+            else
+              echo DOITAI_GH_NOT_INSTALLED
+            fi
+            echo '=== RUNTIME ==='
+            docker version --format 'server={{.Server.Version}}' || true
+            docker ps --format 'name={{.Names}} image={{.Image}} status={{.Status}}' | head -n 40
+            ss -ltn 2>/dev/null | grep -E ':(4608|4609)\b' || true
