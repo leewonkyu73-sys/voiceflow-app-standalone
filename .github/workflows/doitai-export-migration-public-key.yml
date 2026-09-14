@@ -1,4 +1,4 @@
-name: DOITAI Export Migration Public Key
+name: DOITAI Target Data Audit
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  export:
+  audit:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,7 +25,15 @@ jobs:
           command_timeout: 3m
           script: |
             set -eu
-            export GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
-            printf 'DOITAI_MIGRATION_PUBLIC_KEY_B64='
-            gpg --batch --export | base64 -w0
-            printf '\nDOITAI_MIGRATION_PUBLIC_KEY_EXPORT_PASS\n'
+            PG=star45-core-postgres
+            DB=star45_doitai
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            tables='api_integration_settings app_connections app_intro_preferences app_intros attendance_records board_admins board_comments board_posts boards capture_configs cash_ledger_accounts cash_ledger_bank_accounts cash_ledger_entries checklist_template_categories checklist_template_items checklist_templates clients consult_sessions content_category_files contents data_structure_prompts duty_assignments expense_schedules idea_memos inventory_items inventory_transactions invitations job_history notifications onboarding_configs phase_translations phases plan_configs profiles project_checklist_categories project_checklist_items project_checklists project_translations projects schedule_checklist_categories schedule_checklist_items schedule_checklists schedule_translations schedules secretary_monitors secretary_reports settlements stores subtasks task_action_history task_translations tasks team_app_links team_members team_messages team_work_schedules teams user_favorite_apps user_roles web_sites'
+            for t in $tables; do
+              n=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atqc "select count(*) from public.$t")
+              echo "DOITAI_TARGET_COUNT $t $n"
+            done
+            code=$(curl -sS -o /tmp/doitai-health.json -w '%{http_code}' http://127.0.0.1:4608/health)
+            echo "DOITAI_HEALTH_HTTP $code"
+            test "$code" = 200
+            echo DOITAI_TARGET_DATA_AUDIT_PASS
