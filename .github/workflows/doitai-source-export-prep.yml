@@ -1,0 +1,46 @@
+name: DOITAI Source Export Prep
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-source-export-prep.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -eu
+            APP=/opt/star45/doitai
+            SEC=/opt/star45/secrets
+            TOKEN_FILE=$SEC/doitai-source-export.token
+            mkdir -p "$SEC"
+            chmod 700 "$SEC"
+            if [ ! -f "$TOKEN_FILE" ]; then
+              umask 077
+              openssl rand -hex 32 > "$TOKEN_FILE"
+            fi
+            chmod 600 "$TOKEN_FILE"
+            HASH=$(sha256sum "$TOKEN_FILE" | awk '{print $1}')
+            test "${#HASH}" -eq 64
+            cd "$APP"
+            test -f .env
+            grep -q '^VITE_SUPABASE_URL=' .env
+            grep -Eq '^VITE_SUPABASE_(PUBLISHABLE_KEY|ANON_KEY)=' .env
+            echo "DOITAI_SOURCE_EXPORT_TOKEN_SHA256=$HASH"
+            echo DOITAI_SOURCE_EXPORT_PREP_PASS
