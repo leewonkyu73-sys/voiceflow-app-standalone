@@ -1,0 +1,47 @@
+name: DOITAI VPS Preview Verify
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-vps-preview-verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -u
+            C=star45-doitai
+            echo '=== CONTAINER ==='
+            docker ps -a --filter name="^/${C}$" --format 'name={{.Names}} status={{.Status}} ports={{.Ports}}'
+            echo '=== PORT BINDINGS ==='
+            docker inspect "$C" -f 'ports={{json .NetworkSettings.Ports}} bindings={{json .HostConfig.PortBindings}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null || true
+            echo '=== COMPOSE SOURCE ==='
+            sed -n '1,160p' /opt/star45/doitai/compose.vps.yml 2>/dev/null || true
+            echo '=== COMPOSE CONFIG ==='
+            cd /opt/star45/doitai 2>/dev/null && STAR45_DB_NETWORK=star45-core-private docker compose -f compose.vps.yml config 2>/dev/null || true
+            echo '=== HOST HEALTH ==='
+            code=$(curl -sS -o /tmp/doitai-host-health.json -w '%{http_code}' --max-time 4 http://127.0.0.1:4608/health 2>/dev/null || true)
+            echo "host_health_http=$code"
+            cat /tmp/doitai-host-health.json 2>/dev/null || true
+            echo
+            echo '=== CONTAINER HEALTH ==='
+            docker exec "$C" sh -lc 'node -e "fetch(\"http://127.0.0.1:4608/health\").then(async r=>{console.log(\"container_health_http=\"+r.status); console.log(await r.text())}).catch(e=>{console.error(String(e));process.exit(1)})"' 2>/dev/null || true
+            echo '=== APP LOG TAIL ==='
+            docker logs --tail=80 "$C" 2>&1 || true
+            echo DOITAI_PREVIEW_VERIFY_READONLY_DONE
