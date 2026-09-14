@@ -1,0 +1,49 @@
+name: DOITAI Migration Crypto Roundtrip
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-migration-crypto-roundtrip.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 4m
+          script: |
+            set -eu
+            GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            export GNUPGHOME
+            CIPHER=/tmp/doitai-migration-probe.pgp
+            OUT=/tmp/doitai-migration-probe.json
+            trap 'rm -f "$CIPHER" "$OUT"' EXIT
+            cat > /tmp/doitai-migration-probe.b64 <<'B64'
+            wcDMA/frc3ner+93AQwAmynXDMygHBwWQgi86jNrCuF9mCTzJhrIaNxJyExDkSmpjHMF/IsKzM3O
+            bUR6uTR4Ee0xbHHyJs9h68GN6i6ab4bZi0cMQCor0vtqF2kDYZaUhc83LiAWyAOqf4C8fowF5LjV
+            rxjDZl4vTTzp+X6+qr0rRk8JAssW4vFXQslkD/bEIfqT/MuldfZA5thZDIUz8GuQ/uJtlZ14sr+e
+            75akXuapIAfTzQFHwwA1vqRdp78IZAY/ECJkFWlSKLAYC5YGo2FCcrA00qUpQ5oFtrgCaJlPu3Dv
+            eO67AacCK1RyTL6rolAoMiXfT6CnARqc3DjdcYgsLFHly/whtlvq6PEU5iUHoeeKfGfarGkfvfOL
+            lh/6V32whHWzqJ3zXL6KU4PscuV8KpU6u/kC+b+9xmedCDWNS2e0h6765l5wUk0yIRSITnWM5o8e
+            oCcP9gCHgTbpeNpN4V+ysenmFgSZRJ67lRdt+OJhi1stLEaJ3p1hKZ0o3nTM8Jrwh7teenfQp2PC
+            0j8B3eZPGuVmMlmR6xMcTY4oesMw/cXh7P9QyzBI2guZgoi3v0gC/tVX8N8ZzX1p2sHj+zhKneno
+            vOXrW1mV4yw=
+            B64
+            tr -d '[:space:]' </tmp/doitai-migration-probe.b64 | base64 -d > "$CIPHER"
+            rm -f /tmp/doitai-migration-probe.b64
+            gpg --batch --quiet --decrypt "$CIPHER" > "$OUT"
+            test "$(cat "$OUT")" = '{"probe":"ok"}'
+            echo DOITAI_MIGRATION_CRYPTO_ROUNDTRIP_PASS
