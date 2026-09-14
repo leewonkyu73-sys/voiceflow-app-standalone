@@ -52,3 +52,5 @@ jobs:
             chmod 600 "$JSON"
             for spec in api_integration_settings:3 capture_configs:1 cash_ledger_accounts:14 cash_ledger_bank_accounts:7 clients:2; do table=${spec%%:*}; expected=${spec##*:}; actual=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atc "select count(*) from public.$table;"); test "$actual" = "$expected"; done
             echo DOITAI_PUBLIC_R2_IMPORT_PASS
+
+# trigger: 2026-09-14-r2
