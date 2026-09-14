@@ -1,0 +1,31 @@
+name: DOITAI Export Migration Public Key
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-export-migration-public-key.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          command_timeout: 3m
+          script: |
+            set -eu
+            export GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            printf 'DOITAI_MIGRATION_PUBLIC_KEY_B64='
+            gpg --batch --export | base64 -w0
+            printf '\nDOITAI_MIGRATION_PUBLIC_KEY_EXPORT_PASS\n'
