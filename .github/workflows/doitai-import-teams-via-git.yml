@@ -1,0 +1,77 @@
+name: DOITAI Import Encrypted Teams via Git
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-import-teams-via-git.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: false
+          command_timeout: 7m
+          script: |
+            set -eu
+            BRIDGE=/tmp/doitai-migration-bridge
+            BRANCH=probe/doitai-vps-access-20260914
+            REPO=git@github.com:leewonkyu73-sys/voiceflow-app-standalone.git
+            APP=/opt/star45/doitai
+            PG=star45-core-postgres
+            DB=star45_doitai
+            ENC=$BRIDGE/.doitai-migration/teams.pgp.b64
+            BIN=/tmp/doitai-teams.pgp
+            JSON=/tmp/doitai-teams.json
+            GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            export GNUPGHOME
+            cleanup() {
+              rm -f "$BIN" "$JSON"
+              rm -rf "$BRIDGE"
+            }
+            trap cleanup EXIT
+
+            rm -rf "$BRIDGE"
+            git clone --depth=1 --branch "$BRANCH" "$REPO" "$BRIDGE" >/dev/null 2>&1
+            test -s "$ENC"
+            test -f "$APP/server/tools/import-public-data.mjs"
+
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            before=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atc 'select count(*) from public.teams;')
+            test "$before" = 0
+
+            stamp=$(date -u +%Y%m%dT%H%M%SZ)
+            mkdir -p "$APP/backups"
+            docker exec "$PG" pg_dump -U "$PGU" -Fc "$DB" > "$APP/backups/pre-data-teams-${stamp}.dump"
+            test -s "$APP/backups/pre-data-teams-${stamp}.dump"
+            echo DOITAI_PRE_DATA_BACKUP_PASS
+
+            tr -d '[:space:]' < "$ENC" | base64 -d > "$BIN"
+            gpg --batch --quiet --decrypt "$BIN" > "$JSON"
+            chmod 600 "$JSON"
+            node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(p.table!=='teams'||p.expected_count!==6||!Array.isArray(p.rows)||p.rows.length!==6)process.exit(1)" "$JSON"
+            echo DOITAI_ENCRYPTED_TEAMS_DECRYPT_PASS
+
+            docker run --rm --network star45-core-private \
+              --env-file /opt/star45/secrets/doitai-migration.env \
+              -v "$APP/server/tools:/app/server/tools:ro" \
+              -v "$JSON:/payload.json:ro" \
+              star45-doitai:vps-direct \
+              node /app/server/tools/import-public-data.mjs /payload.json
+
+            after=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -Atc 'select count(*) from public.teams;')
+            test "$after" = 6
+            echo DOITAI_TEAMS_IMPORT_COUNT_PASS
+            echo DOITAI_ENCRYPTED_TEAMS_IMPORT_PASS
