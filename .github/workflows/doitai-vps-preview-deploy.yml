@@ -22,7 +22,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: 22
           timeout: 90s
-          script_stop: true
+          script_stop: false
           command_timeout: 20m
           script: |
             set -eu
@@ -34,17 +34,22 @@ jobs:
             NET=star45-core-private
 
             echo '=== DOITAI PREVIEW BASELINE ==='
-            if docker network inspect "$NET" >/dev/null 2>&1; then echo 'BASELINE_NETWORK_PASS'; else echo 'BASELINE_NETWORK_FAIL'; exit 31; fi
-            if docker inspect "$PG" >/dev/null 2>&1; then echo 'BASELINE_POSTGRES_CONTAINER_PASS'; else echo 'BASELINE_POSTGRES_CONTAINER_FAIL'; exit 32; fi
-            if docker ps --format '{{.Names}}' | grep -qx "$PG"; then echo 'BASELINE_POSTGRES_RUNNING_PASS'; else echo 'BASELINE_POSTGRES_RUNNING_FAIL'; exit 33; fi
+            docker network inspect "$NET" >/dev/null 2>&1 || { echo 'BASELINE_NETWORK_FAIL'; exit 31; }
+            echo 'BASELINE_NETWORK_PASS'
+            docker inspect "$PG" >/dev/null 2>&1 || { echo 'BASELINE_POSTGRES_CONTAINER_FAIL'; exit 32; }
+            echo 'BASELINE_POSTGRES_CONTAINER_PASS'
+            docker ps --format '{{.Names}}' | grep -qx "$PG" || { echo 'BASELINE_POSTGRES_RUNNING_FAIL'; exit 33; }
+            echo 'BASELINE_POSTGRES_RUNNING_PASS'
             PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
             PGD=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_DB:-postgres}"')
-            if docker exec "$PG" pg_isready -U "$PGU" -d "$PGD" >/dev/null 2>&1; then echo 'BASELINE_POSTGRES_READY_PASS'; else echo 'BASELINE_POSTGRES_READY_FAIL'; exit 34; fi
-            if ss -ltn 2>/dev/null | grep -Eq '127\.0\.0\.1:4608\b'; then
+            docker exec "$PG" pg_isready -U "$PGU" -d "$PGD" >/dev/null 2>&1 || { echo 'BASELINE_POSTGRES_READY_FAIL'; exit 34; }
+            echo 'BASELINE_POSTGRES_READY_PASS'
+            port_line=$(ss -ltn 2>/dev/null | grep -E '127\.0\.0\.1:4608\b' || true)
+            if [ -n "$port_line" ]; then
               owner=$(docker ps --format '{{.Names}}|{{.Ports}}' | grep -E '127\.0\.0\.1:4608->' | cut -d'|' -f1 || true)
               if [ "$owner" != star45-doitai ]; then
                 echo 'BASELINE_PORT_4608_CONFLICT'
-                ss -ltnp 2>/dev/null | grep -E ':4608\b' || true
+                printf '%s\n' "$port_line"
                 exit 35
               fi
               echo 'BASELINE_EXISTING_DOITAI_PORT_PASS'
@@ -56,7 +61,8 @@ jobs:
             if [ -e "$APP_DIR/.git" ]; then
               cd "$APP_DIR"
               origin=$(git remote get-url origin)
-              if printf '%s\n' "$origin" | grep -Eq 'github\.com[:/]leewonkyu73-sys/doitai(\.git)?$'; then echo 'SOURCE_ORIGIN_PASS'; else echo 'SOURCE_ORIGIN_FAIL'; exit 36; fi
+              printf '%s\n' "$origin" | grep -Eq 'github\.com[:/]leewonkyu73-sys/doitai(\.git)?$' || { echo 'SOURCE_ORIGIN_FAIL'; exit 36; }
+              echo 'SOURCE_ORIGIN_PASS'
               old=$(git rev-parse HEAD)
               echo "existing_repo_commit=$old"
               printf '%s\n' "$old" > /opt/star45/doitai-predeploy-commit.txt
@@ -76,7 +82,8 @@ jobs:
 
             actual=$(git rev-parse HEAD)
             echo "checked_out_commit=$actual"
-            if [ "$actual" = "$EXPECTED" ]; then echo 'SOURCE_COMMIT_PASS'; else echo 'SOURCE_COMMIT_FAIL'; exit 38; fi
+            [ "$actual" = "$EXPECTED" ] || { echo 'SOURCE_COMMIT_FAIL'; exit 38; }
+            echo 'SOURCE_COMMIT_PASS'
 
             echo '=== RUN DIRECT VPS DEPLOY ==='
             sh scripts/vps-direct-deploy.sh
