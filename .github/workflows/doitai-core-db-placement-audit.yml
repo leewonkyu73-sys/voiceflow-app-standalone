@@ -1,0 +1,46 @@
+name: DOITAI Core DB Placement Audit
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.github/workflows/doitai-core-db-placement-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script_stop: true
+          command_timeout: 4m
+          script: |
+            set -eu
+            PG=star45-core-postgres
+            echo '=== CORE NETWORK MEMBERS ==='
+            docker network inspect star45-core-private --format '{{range $id,$c := .Containers}}{{$c.Name}} {{end}}'
+            echo '=== CORE POSTGRES HEALTH ==='
+            docker exec "$PG" pg_isready
+            ADMIN_USER=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            ADMIN_DB=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_DB:-postgres}"')
+            echo '=== CLUSTER CAPACITY ==='
+            docker exec "$PG" psql -U "$ADMIN_USER" -d "$ADMIN_DB" -Atc "select 'max_connections='||setting from pg_settings where name='max_connections'; select 'active_connections='||count(*) from pg_stat_activity; select 'cluster_db_bytes='||coalesce(sum(pg_database_size(datname)),0) from pg_database where datistemplate=false;"
+            echo '=== DATABASE INVENTORY ==='
+            docker exec "$PG" psql -U "$ADMIN_USER" -d "$ADMIN_DB" -Atc "select datname||'|'||pg_database_size(datname) from pg_database where datistemplate=false order by datname;"
+            echo '=== DOITAI COLLISION CHECK ==='
+            docker exec "$PG" psql -U "$ADMIN_USER" -d "$ADMIN_DB" -Atc "select 'doitai_db='||count(*) from pg_database where datname='star45_doitai'; select 'doitai_roles='||count(*) from pg_roles where rolname in ('star45_doitai_owner','star45_doitai_app');"
+            echo '=== COMPAT ROLE CHECK ==='
+            docker exec "$PG" psql -U "$ADMIN_USER" -d "$ADMIN_DB" -Atc "select rolname||'|login='||rolcanlogin||'|bypassrls='||rolbypassrls||'|super='||rolsuper from pg_roles where rolname in ('anon','authenticated','service_role') order by rolname;"
+            echo '=== HOST CAPACITY ==='
+            free -m | awk 'NR==2 {print "mem_total_mb=" $2 " mem_used_mb=" $3 " mem_available_mb=" $7}'
+            df -Pm /opt 2>/dev/null | awk 'NR==2 {print "disk_total_mb=" $2 " disk_used_mb=" $3 " disk_available_mb=" $4 " disk_use=" $5}' || true
+            echo DOITAI_CORE_DB_PLACEMENT_AUDIT_PASS
