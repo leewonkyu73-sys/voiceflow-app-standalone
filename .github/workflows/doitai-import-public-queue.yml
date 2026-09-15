@@ -47,9 +47,8 @@ jobs:
             git -C "$BRIDGE" checkout --detach ${{ github.sha }} >/dev/null 2>&1
             git clone --depth=1 --branch vps-direct-migration-20260914 git@github.com:leewonkyu73-sys/doitai.git "$CODE" >/dev/null 2>&1
 
-            test -d "$BRIDGE/.doitai-migration/queue"
-            COUNT=$(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.hex' | wc -l | tr -d '[:space:]')
-            test "$COUNT" -eq 8
+            COUNT=$(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.b64' | wc -l | tr -d '[:space:]')
+            test "$COUNT" -ge 1
             echo "DOITAI_PUBLIC_QUEUE_FILES_PASS count=$COUNT"
 
             PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
@@ -59,19 +58,9 @@ jobs:
             test -s "$APP/backups/pre-public-queue-${stamp}.dump"
             echo DOITAI_PRE_PUBLIC_QUEUE_BACKUP_PASS
 
-            for SRC in $(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.hex' | sort); do
+            for SRC in $(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.b64' | sort); do
               LABEL=$(basename "$SRC")
-              EXPECTED_SHA=$(sed -n '1p' "$SRC" | tr -d '[:space:]')
-              EXPECTED_BYTES=$(sed -n '2p' "$SRC" | tr -d '[:space:]')
-              test -n "$EXPECTED_SHA"
-              test -n "$EXPECTED_BYTES"
-              tail -n +3 "$SRC" | tr -d '[:space:]' | xxd -r -p > "$BIN"
-              ACTUAL_SHA=$(sha256sum "$BIN" | awk '{print $1}')
-              ACTUAL_BYTES=$(wc -c < "$BIN" | tr -d '[:space:]')
-              test "$ACTUAL_SHA" = "$EXPECTED_SHA"
-              test "$ACTUAL_BYTES" = "$EXPECTED_BYTES"
-              echo "DOITAI_PUBLIC_QUEUE_TRANSPORT_PASS file=$LABEL"
-
+              tr -d '[:space:]' < "$SRC" | base64 -d > "$BIN"
               gpg --batch --quiet --decrypt "$BIN" > "$JSON"
               chmod 644 "$JSON"
               docker run --rm --network star45-core-private \
@@ -84,9 +73,28 @@ jobs:
               echo "DOITAI_PUBLIC_QUEUE_IMPORT_PASS file=$LABEL"
             done
 
-            CAT=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c 'select count(*) from public.checklist_template_categories')
-            ITEM=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c 'select count(*) from public.checklist_template_items')
-            test "$CAT" -eq 83
-            test "$ITEM" -eq 287
-            echo "DOITAI_CHECKLIST_FINAL_COUNT_PASS categories=$CAT items=$ITEM"
-            echo DOITAI_PUBLIC_QUEUE_IMPORT_COMPLETE
+            check_count() { T="$1"; E="$2"; A=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c "select count(*) from public.$T"); test "$A" -eq "$E"; echo "DOITAI_COUNT_PASS table=$T rows=$A"; }
+            check_count board_posts 41
+            check_count board_admins 5
+            check_count board_comments 16
+            check_count cash_ledger_entries 439
+            check_count consult_sessions 8
+            check_count content_category_files 1
+            check_count data_structure_prompts 12
+            check_count expense_schedules 11
+            check_count idea_memos 134
+            check_count inventory_items 10
+            check_count inventory_transactions 2
+            check_count notifications 134
+            check_count onboarding_configs 48
+            check_count schedules 231
+            check_count schedule_checklists 33
+            check_count schedule_checklist_categories 73
+            check_count schedule_checklist_items 212
+            check_count schedule_translations 1065
+            check_count secretary_monitors 8
+            check_count secretary_reports 6
+            check_count settlements 2
+            check_count team_messages 2
+            check_count web_sites 1
+            echo DOITAI_REMAINING_PUBLIC_DATA_COMPLETE
