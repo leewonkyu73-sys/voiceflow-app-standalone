@@ -1,0 +1,92 @@
+name: DOITAI Import Verified Public Queue
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.doitai-migration/queue-ready'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doitai-public-queue-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: true
+          command_timeout: 12m
+          script: |
+            set -eu
+            BRIDGE=/tmp/doitai-migration-queue
+            CODE=/tmp/doitai-code-queue
+            APP=/opt/star45/doitai
+            PG=star45-core-postgres
+            DB=star45_doitai
+            BIN=/tmp/doitai-public-queue.pgp
+            JSON=/tmp/doitai-public-queue.json
+            GNUPGHOME=/opt/star45/secrets/doitai-migration-gnupg
+            export GNUPGHOME
+            cleanup() { chmod 600 "$JSON" 2>/dev/null || true; rm -f "$BIN" "$JSON"; rm -rf "$BRIDGE" "$CODE"; }
+            trap cleanup EXIT
+
+            git clone --depth=1 --branch probe/doitai-vps-access-20260914 git@github.com:leewonkyu73-sys/voiceflow-app-standalone.git "$BRIDGE" >/dev/null 2>&1
+            git -C "$BRIDGE" fetch --depth=1 origin ${{ github.sha }} >/dev/null 2>&1
+            git -C "$BRIDGE" checkout --detach ${{ github.sha }} >/dev/null 2>&1
+            git clone --depth=1 --branch vps-direct-migration-20260914 git@github.com:leewonkyu73-sys/doitai.git "$CODE" >/dev/null 2>&1
+
+            test -d "$BRIDGE/.doitai-migration/queue"
+            COUNT=$(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.hex' | wc -l | tr -d '[:space:]')
+            test "$COUNT" -eq 8
+            echo "DOITAI_PUBLIC_QUEUE_FILES_PASS count=$COUNT"
+
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            stamp=$(date -u +%Y%m%dT%H%M%SZ)
+            mkdir -p "$APP/backups"
+            docker exec "$PG" pg_dump -U "$PGU" -Fc "$DB" > "$APP/backups/pre-public-queue-${stamp}.dump"
+            test -s "$APP/backups/pre-public-queue-${stamp}.dump"
+            echo DOITAI_PRE_PUBLIC_QUEUE_BACKUP_PASS
+
+            for SRC in $(find "$BRIDGE/.doitai-migration/queue" -maxdepth 1 -type f -name '*.pgp.hex' | sort); do
+              LABEL=$(basename "$SRC")
+              EXPECTED_SHA=$(sed -n '1p' "$SRC" | tr -d '[:space:]')
+              EXPECTED_BYTES=$(sed -n '2p' "$SRC" | tr -d '[:space:]')
+              test -n "$EXPECTED_SHA"
+              test -n "$EXPECTED_BYTES"
+              tail -n +3 "$SRC" | tr -d '[:space:]' | xxd -r -p > "$BIN"
+              ACTUAL_SHA=$(sha256sum "$BIN" | awk '{print $1}')
+              ACTUAL_BYTES=$(wc -c < "$BIN" | tr -d '[:space:]')
+              test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+              test "$ACTUAL_BYTES" = "$EXPECTED_BYTES"
+              echo "DOITAI_PUBLIC_QUEUE_TRANSPORT_PASS file=$LABEL"
+
+              gpg --batch --quiet --decrypt "$BIN" > "$JSON"
+              chmod 644 "$JSON"
+              docker run --rm --network star45-core-private \
+                --env-file /opt/star45/secrets/doitai-migration.env \
+                -v "$CODE/server/tools:/app/server/tools:ro" \
+                -v "$JSON:/payload.json:ro" \
+                star45-doitai:vps-direct \
+                node /app/server/tools/import-public-data.mjs /payload.json
+              chmod 600 "$JSON"
+              echo "DOITAI_PUBLIC_QUEUE_IMPORT_PASS file=$LABEL"
+            done
+
+            CAT=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c 'select count(*) from public.checklist_template_categories')
+            ITEM=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c 'select count(*) from public.checklist_template_items')
+            test "$CAT" -eq 83
+            test "$ITEM" -eq 287
+            echo "DOITAI_CHECKLIST_FINAL_COUNT_PASS categories=$CAT items=$ITEM"
+            echo DOITAI_PUBLIC_QUEUE_IMPORT_COMPLETE
