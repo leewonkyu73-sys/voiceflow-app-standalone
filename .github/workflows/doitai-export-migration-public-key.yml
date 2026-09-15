@@ -29,3 +29,4 @@ jobs:
             printf 'DOITAI_MIGRATION_PUBLIC_KEY_B64='
             gpg --batch --export | base64 -w0
             printf '\nDOITAI_MIGRATION_PUBLIC_KEY_EXPORT_PASS\n'
+# refresh public-key export trigger 2026-09-15
