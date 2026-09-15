@@ -1,0 +1,34 @@
+name: DOITAI Target Count Audit
+
+on:
+  push:
+    branches: [probe/doitai-vps-access-20260914]
+    paths:
+      - '.doitai-migration/count-audit-trigger'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 187.127.216.242
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          timeout: 90s
+          script_stop: true
+          command_timeout: 3m
+          script: |
+            set -eu
+            PG=star45-core-postgres
+            DB=star45_doitai
+            PGU=$(docker exec "$PG" sh -lc 'printf %s "${POSTGRES_USER:-postgres}"')
+            docker exec "$PG" psql -U "$PGU" -d "$DB" -At -F '|' -c "SELECT schemaname||'.'||relname, n_live_tup::bigint FROM pg_stat_user_tables WHERE schemaname='public' ORDER BY relname" >/tmp/doitai-stat.txt
+            docker exec "$PG" psql -U "$PGU" -d "$DB" -At -F '|' -c "SELECT quote_ident(tablename) FROM pg_tables WHERE schemaname='public' ORDER BY tablename" | while read t; do n=$(docker exec "$PG" psql -U "$PGU" -d "$DB" -At -c "SELECT count(*) FROM public.$t"); printf '%s|%s\n' "$t" "$n"; done
+            echo DOITAI_TARGET_COUNT_AUDIT_PASS
